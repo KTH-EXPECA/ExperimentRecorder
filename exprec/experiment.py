@@ -29,8 +29,6 @@ from .models import VARTYPES, make_variable_table
 class _ExperimentMetadata(abc.ABC):
     # TODO: make a reader?
 
-    EXPERIMENT_GROUP = '/experiments'
-
     def __init__(self, name: str):
         self._name = name
         self._created = datetime.now()
@@ -82,8 +80,7 @@ class ExperimentWriter(_ExperimentMetadata):
                  name: str,
                  h5file: tables.File,
                  title: str = '',
-                 parent: Union[tables.Group, str] =
-                 _ExperimentMetadata.EXPERIMENT_GROUP):
+                 parent: Union[tables.Group, str] = '/'):
         super(ExperimentWriter, self).__init__(name)
         self._file = h5file
         self._title = title
@@ -93,8 +90,7 @@ class ExperimentWriter(_ExperimentMetadata):
         try:
             self._group = h5file.get_node(parent, name=name)
         except tables.exceptions.NoSuchNodeError:
-            self._group = h5file.create_group(parent, name=name,
-                                              title=title, createparents=True)
+            self._group = h5file.create_group(parent, name=name, title=title)
 
         self._variables: Dict[str, ExperimentVariableWriter] = {}
         self._sub_experiments: Dict[uuid.UUID, ExperimentWriter] = {}
@@ -121,8 +117,18 @@ class ExperimentWriter(_ExperimentMetadata):
         self._sub_experiments[sub_exp.experiment_id] = sub_exp
         return sub_exp
 
-    def register_variable(self, name: str, vartype: VARTYPES) -> None:
-        pass
+    def register_variable(self, name: str,
+                          vartype: VARTYPES,
+                          title: str = '') -> None:
+        var_writer = ExperimentVariableWriter(
+            name=name,
+            vartype=vartype,
+            h5file=self._file,
+            title=title,
+            parent=self._group
+        )
+
+        self._variables[name] = var_writer
 
     def update_variable(self,
                         name: str,
