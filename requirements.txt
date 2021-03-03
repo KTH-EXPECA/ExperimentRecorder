@@ -1,0 +1,7 @@
+twisted
+click
+msgpack
+tables
+numpy
+pandas
+scipy
