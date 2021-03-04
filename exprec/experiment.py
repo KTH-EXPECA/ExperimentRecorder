@@ -13,6 +13,7 @@
 #  limitations under the License.
 from __future__ import annotations
 
+import abc
 import datetime
 from os import PathLike
 from pathlib import Path
@@ -30,50 +31,47 @@ _vartype_columns = {
 }
 
 
-class ExperimentWriter:
-    def __init__(self,
-                 h5file: tables.File,
-                 parent_group: tables.Group,
-                 exp_id: str,
-                 exp_title: str,
-                 variables: Mapping[str, VarType]):
-        super(ExperimentWriter, self).__init__()
-
-        self._id = exp_id
-        self._title = exp_title
-
-        self._file = h5file
-        self._group = h5file.create_group(parent_group, exp_id, title=exp_title)
-
-        # metadata
-        self._group._v_attrs.created = datetime.datetime.now().isoformat()
-        self._group._v_attrs.finished = 'unfinished'
-
-        self._var_tables = {}
-        for var_name, var_type in variables.items():
-            # TODO handle wrong type
-            tbl = h5file.create_table(
-                self._group, var_name,
-                description={
-                    'record_time'    : tables.Time64Col(),
-                    'experiment_time': tables.Time64Col(),
-                    'value'          : _vartype_columns[var_type]()
-                })
-            self._var_tables[var_name] = tbl
-
+class ExperimentWriter(abc.ABC):
     @property
+    @abc.abstractmethod
     def get_id(self) -> str:
-        return self._id
+        pass
 
     @property
+    @abc.abstractmethod
     def get_title(self) -> str:
-        return self._title
+        pass
+
+    @abc.abstractmethod
+    def make_sub_experiment(self,
+                            sub_exp_id: str,
+                            variables: Mapping[str, VarType],
+                            sub_exp_title: str = '') -> ExperimentWriter:
+        pass
+
+    @abc.abstractmethod
+    def record_variable(self,
+                        name: str,
+                        value: VarValue,
+                        timestamp: float) -> None:
+        pass
+
+    @abc.abstractmethod
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> ExperimentWriter:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     @staticmethod
     def create(file_path: PathLike,
                exp_id: str,
                variables: Mapping[str, VarType],
                exp_title: str = '') -> ExperimentWriter:
+        # TODO: make top level function instead
         """
         Creates the HDF file and initializes an experiment on it.
 
@@ -92,32 +90,81 @@ class ExperimentWriter:
         h5 = tables.open_file(str(file_path), mode='a',
                               title='Experiment Data File')
 
-        return ExperimentWriter(h5, h5.root, exp_id, exp_title, variables)
+        return _ExperimentWriter(h5, h5.root, exp_id, exp_title, variables)
+
+
+# noinspection PyProtectedMember
+class _ExperimentWriter(ExperimentWriter):
+    def __init__(self,
+                 h5file: tables.File,
+                 parent_group: tables.Group,
+                 exp_id: str,
+                 exp_title: str,
+                 variables: Mapping[str, VarType]):
+        super(_ExperimentWriter, self).__init__()
+
+        self._id = exp_id
+        self._title = exp_title
+
+        self._file = h5file
+        self._group = h5file.create_group(parent_group, exp_id, title=exp_title)
+
+        # metadata
+        self._group._v_attrs.created = datetime.datetime.now().isoformat()
+        self._group._v_attrs.finished = 'unfinished'
+
+        self._var_tables = dict()
+        for var_name, var_type in variables.items():
+            # TODO handle wrong type
+            tbl = h5file.create_table(
+                self._group, var_name,
+                description={
+                    'record_time'    : tables.Time64Col(),
+                    'experiment_time': tables.Time64Col(),
+                    'value'          : _vartype_columns[var_type]()
+                })
+            self._var_tables[var_name] = tbl
+
+        self._sub_experiments = dict()
+
+    @property
+    def get_id(self) -> str:
+        return self._id
+
+    @property
+    def get_title(self) -> str:
+        return self._title
 
     def make_sub_experiment(self,
                             sub_exp_id: str,
                             variables: Mapping[str, VarType],
                             sub_exp_title: str = '') -> ExperimentWriter:
-        return ExperimentWriter(self._file,
-                                self._group,
-                                sub_exp_id,
-                                sub_exp_title,
-                                variables)
-
-    def record_variable(self,
-                        name: str,
-                        value: VarValue,
-                        timestamp: float) -> None:
-        pass
+        sub_exp = _ExperimentWriter(self._file,
+                                    self._group,
+                                    sub_exp_id,
+                                    sub_exp_title,
+                                    variables)
+        self._sub_experiments[sub_exp_id] = sub_exp
+        return sub_exp
 
     def close(self) -> None:
-        """
-        Flushes and closes the underlying file. Timestamp ending.
-        :return:
-        """
+        # close all sub-experiments
+        for _, sub_exp in self._sub_experiments.items():
+            sub_exp.close()
 
-    def __enter__(self) -> ExperimentWriter:
-        return self
+        # flush everything
+        for _, tbl in self._var_tables.items():
+            tbl.flush()
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+        # timestamp our end time
+        # TODO: boolean to indicate we've finished?
+        self._group._v_attrs.finished = datetime.datetime.now().isoformat()
+
+
+class _TopLevelExperimentWriter(_ExperimentWriter):
+    def close(self) -> None:
+        super(_TopLevelExperimentWriter, self).close()
+
+        # top level experiment also closes the file
+        self._file.flush()
+        self._file.close()
