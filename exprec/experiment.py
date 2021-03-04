@@ -11,127 +11,113 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
 from __future__ import annotations
 
-import abc
-import time
-import uuid
-from datetime import datetime
-from typing import Any, Dict, Optional, Union
+import datetime
+from os import PathLike
+from pathlib import Path
+from typing import Mapping, Type, Union
 
 import tables
-import tables.exceptions
 
-from .models import VARTYPES, make_variable_table
+VarType = Union[Type[int], Type[float], Type[bool]]
+VarValue = Union[int, float, bool]
 
-
-class _ExperimentMetadata(abc.ABC):
-    # TODO: make a reader?
-
-    def __init__(self, name: str):
-        self._name = name
-        self._created = datetime.now()
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def created(self) -> datetime:
-        return self._created
+_vartype_columns = {
+    int  : tables.Int64Col,
+    float: tables.Float64Col,
+    bool : tables.BoolCol
+}
 
 
-class ExperimentVariableWriter(_ExperimentMetadata):
+class ExperimentWriter:
     def __init__(self,
-                 name: str,
-                 vartype: VARTYPES,
                  h5file: tables.File,
-                 title: str = '',
-                 parent: Union[str, tables.Group] = '/'):
-        super(ExperimentVariableWriter, self).__init__(name)
-        self._vartype = vartype
+                 parent_group: tables.Group,
+                 exp_id: str,
+                 exp_title: str,
+                 variables: Mapping[str, VarType]):
+        super(ExperimentWriter, self).__init__()
 
-        self._tbl = h5file.create_table(
-            where=parent,
-            name=name,
-            description=make_variable_table(vartype),
-            title=title
-        )
+        self._id = exp_id
+        self._title = exp_title
 
-        # TODO how often to flush?
-
-    def record_value(self, value: Any, exp_timestamp: float) -> None:
-        row = self._tbl.row
-        row['record_time'] = datetime.now().timestamp()
-        row['report_time'] = exp_timestamp
-        row['value'] = value
-
-        row.append()
-
-        # TODO: flush?
-
-    def flush_to_disk(self) -> None:
-        self._tbl.flush()
-
-
-class ExperimentWriter(_ExperimentMetadata):
-    def __init__(self,
-                 name: str,
-                 h5file: tables.File,
-                 title: str = '',
-                 parent: Union[tables.Group, str] = '/'):
-        super(ExperimentWriter, self).__init__(name)
         self._file = h5file
-        self._title = title
-        self._exp_id = uuid.uuid4()  # for unique lookup
-        self._mono_start_t = time.monotonic()
+        self._group = h5file.create_group(parent_group, exp_id, title=exp_title)
 
-        try:
-            self._group = h5file.get_node(parent, name=name)
-        except tables.exceptions.NoSuchNodeError:
-            self._group = h5file.create_group(parent, name=name, title=title)
+        # metadata
+        self._group._v_attrs.created = datetime.datetime.now().isoformat()
+        self._group._v_attrs.finished = 'unfinished'
 
-        self._variables: Dict[str, ExperimentVariableWriter] = {}
-        self._sub_experiments: Dict[uuid.UUID, ExperimentWriter] = {}
-
-        # set metadata
-        self._group._v_attrs.created_at = self.created.isoformat()
-
-    def flush(self) -> None:
-        for _, v in self._variables.items():
-            v.flush_to_disk()
-
-        for _, v in self._sub_experiments.items():
-            _, v.flush()
+        self._var_tables = {}
+        for var_name, var_type in variables.items():
+            # TODO handle wrong type
+            tbl = h5file.create_table(
+                self._group, var_name,
+                description={
+                    'record_time'    : tables.Time64Col(),
+                    'experiment_time': tables.Time64Col(),
+                    'value'          : _vartype_columns[var_type]()
+                })
+            self._var_tables[var_name] = tbl
 
     @property
-    def experiment_id(self) -> uuid.uuid4():
-        return self._exp_id
+    def get_id(self) -> str:
+        return self._id
 
-    def sub_experiment(self, name: str, title: str = '') -> ExperimentWriter:
-        sub_exp = ExperimentWriter(name=name,
-                                   h5file=self._file,
-                                   title=title,
-                                   parent=self._group)
-        self._sub_experiments[sub_exp.experiment_id] = sub_exp
-        return sub_exp
+    @property
+    def get_title(self) -> str:
+        return self._title
 
-    def register_variable(self, name: str,
-                          vartype: VARTYPES,
-                          title: str = '') -> None:
-        var_writer = ExperimentVariableWriter(
-            name=name,
-            vartype=vartype,
-            h5file=self._file,
-            title=title,
-            parent=self._group
-        )
+    @staticmethod
+    def create(file_path: PathLike,
+               exp_id: str,
+               variables: Mapping[str, VarType],
+               exp_title: str = '') -> ExperimentWriter:
+        """
+        Creates the HDF file and initializes an experiment on it.
 
-        self._variables[name] = var_writer
+        TODO
 
-    def update_variable(self,
+        :param file_path:
+        :param exp_id:
+        :param variables:
+        :param exp_title:
+        :return:
+        """
+
+        # make sure parent folders exist
+        file_path = Path(file_path)
+        file_path.parent.mkdir(exist_ok=True, parents=True)
+        h5 = tables.open_file(str(file_path), mode='a',
+                              title='Experiment Data File')
+
+        return ExperimentWriter(h5, h5.root, exp_id, exp_title, variables)
+
+    def make_sub_experiment(self,
+                            sub_exp_id: str,
+                            variables: Mapping[str, VarType],
+                            sub_exp_title: str = '') -> ExperimentWriter:
+        return ExperimentWriter(self._file,
+                                self._group,
+                                sub_exp_id,
+                                sub_exp_title,
+                                variables)
+
+    def record_variable(self,
                         name: str,
-                        value: Any,
-                        exp_timestamp: Optional[float] = None) -> None:
+                        value: VarValue,
+                        timestamp: float) -> None:
         pass
+
+    def close(self) -> None:
+        """
+        Flushes and closes the underlying file. Timestamp ending.
+        :return:
+        """
+
+    def __enter__(self) -> ExperimentWriter:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
