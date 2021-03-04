@@ -33,6 +33,11 @@ _vartype_columns = {
 }
 
 
+class UnsupportedVariableType(Exception):
+    def __init__(self, t: Type):
+        super(UnsupportedVariableType, self).__init__(t)
+
+
 class ExperimentWriter(abc.ABC):
     @property
     @abc.abstractmethod
@@ -121,15 +126,17 @@ class _ExperimentWriter(ExperimentWriter):
 
         self._var_tables = dict()
         for var_name, var_type in variables.items():
-            # TODO handle wrong type
-            tbl = h5file.create_table(
-                self._group, var_name,
-                description={
-                    'record_time'    : tables.Time64Col(),
-                    'experiment_time': tables.Time64Col(),
-                    'value'          : _vartype_columns[var_type]()
-                })
-            self._var_tables[var_name] = tbl
+            try:
+                tbl = h5file.create_table(
+                    self._group, var_name,
+                    description={
+                        'record_time'    : tables.Time64Col(),
+                        'experiment_time': tables.Time64Col(),
+                        'value'          : _vartype_columns[var_type]()
+                    })
+                self._var_tables[var_name] = tbl
+            except KeyError:
+                raise UnsupportedVariableType(var_type)
 
         self._sub_experiments = dict()
 
