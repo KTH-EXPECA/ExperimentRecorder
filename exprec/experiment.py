@@ -21,6 +21,8 @@ from typing import Mapping, Type, Union
 
 import tables
 
+__all__ = ['VarType', 'VarValue', 'ExperimentWriter']
+
 VarType = Union[Type[int], Type[float], Type[bool]]
 VarValue = Union[int, float, bool]
 
@@ -50,6 +52,10 @@ class ExperimentWriter(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def get_sub_experiment(self, sub_exp_id: str) -> ExperimentWriter:
+        pass
+
+    @abc.abstractmethod
     def record_variable(self,
                         name: str,
                         value: VarValue,
@@ -71,7 +77,6 @@ class ExperimentWriter(abc.ABC):
                exp_id: str,
                variables: Mapping[str, VarType],
                exp_title: str = '') -> ExperimentWriter:
-        # TODO: make top level function instead
         """
         Creates the HDF file and initializes an experiment on it.
 
@@ -95,6 +100,7 @@ class ExperimentWriter(abc.ABC):
 
 # noinspection PyProtectedMember
 class _ExperimentWriter(ExperimentWriter):
+    # TODO: descriptive exceptions?
     def __init__(self,
                  h5file: tables.File,
                  parent_group: tables.Group,
@@ -146,6 +152,19 @@ class _ExperimentWriter(ExperimentWriter):
                                     variables)
         self._sub_experiments[sub_exp_id] = sub_exp
         return sub_exp
+
+    def get_sub_experiment(self, sub_exp_id: str) -> ExperimentWriter:
+        return self._sub_experiments[sub_exp_id]
+
+    def record_variable(self,
+                        name: str,
+                        value: VarValue,
+                        timestamp: float) -> None:
+        row = self._var_tables[name].row
+        row['value'] = value
+        row['experiment_time'] = timestamp
+        row['record_time'] = datetime.datetime.now().timestamp()
+        row.append()
 
     def close(self) -> None:
         # close all sub-experiments
