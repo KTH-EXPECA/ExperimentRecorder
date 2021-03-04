@@ -38,7 +38,16 @@ class UnsupportedVariableType(Exception):
         super(UnsupportedVariableType, self).__init__(t)
 
 
+class ExperimentElementError(Exception):
+    pass
+
+
 class ExperimentWriter(abc.ABC):
+    @property
+    @abc.abstractmethod
+    def h5file(self) -> tables.File:
+        pass
+
     @property
     @abc.abstractmethod
     def get_id(self) -> str:
@@ -69,6 +78,10 @@ class ExperimentWriter(abc.ABC):
 
     @abc.abstractmethod
     def close(self) -> None:
+        pass
+
+    @abc.abstractmethod
+    def flush(self) -> None:
         pass
 
     def __enter__(self) -> ExperimentWriter:
@@ -118,7 +131,24 @@ class _ExperimentWriter(ExperimentWriter):
         self._title = exp_title
 
         self._file = h5file
-        self._group = h5file.create_group(parent_group, exp_id, title=exp_title)
+        try:
+            self._group = h5file.create_group(parent_group, exp_id,
+                                              title=exp_title)
+        except tables.NodeError:
+            try:
+                node = h5file.get_node(parent_group, exp_id)
+                path = node._v_pathname
+                if isinstance(node, tables.Group):
+                    raise ExperimentElementError('Experiment already exists at'
+                                                 f'{path}.')
+                elif isinstance(node, tables.Table):
+                    raise ExperimentElementError('Name conflict: variable '
+                                                 'table already exists at '
+                                                 f'{path}')
+                else:
+                    raise ExperimentElementError(f'Conflict at {path}.')
+            except tables.NoSuchNodeError as e:
+                raise ExperimentElementError() from e
 
         # metadata
         self._group._v_attrs.created = datetime.datetime.now().isoformat()
@@ -141,6 +171,10 @@ class _ExperimentWriter(ExperimentWriter):
         self._sub_experiments = dict()
 
     @property
+    def h5file(self) -> tables.File:
+        return self._file
+
+    @property
     def get_id(self) -> str:
         return self._id
 
@@ -152,6 +186,16 @@ class _ExperimentWriter(ExperimentWriter):
                             sub_exp_id: str,
                             variables: Mapping[str, VarType],
                             sub_exp_title: str = '') -> ExperimentWriter:
+
+        if sub_exp_id in self._sub_experiments:
+            raise ExperimentElementError(f'Sub-experiment {sub_exp_id} '
+                                         f'already exists under '
+                                         f'{self._group._v_pathname}.')
+        elif sub_exp_id in self._var_tables:
+            raise ExperimentElementError('Naming conflict: variable '
+                                         f'table {sub_exp_id}already exists '
+                                         f'under {self._group._v_pathname}')
+
         sub_exp = _ExperimentWriter(self._file,
                                     self._group,
                                     sub_exp_id,
@@ -173,14 +217,20 @@ class _ExperimentWriter(ExperimentWriter):
         row['record_time'] = datetime.datetime.now().timestamp()
         row.append()
 
-    def close(self) -> None:
-        # close all sub-experiments
-        for _, sub_exp in self._sub_experiments.items():
-            sub_exp.close()
-
+    def flush(self) -> None:
         # flush everything
         for _, tbl in self._var_tables.items():
             tbl.flush()
+
+        for _, sexp in self._sub_experiments.items():
+            sexp.flush()
+
+    def close(self) -> None:
+        self.flush()
+
+        # close all sub-experiments
+        for _, sub_exp in self._sub_experiments.items():
+            sub_exp.close()
 
         # timestamp our end time
         # TODO: boolean to indicate we've finished?
