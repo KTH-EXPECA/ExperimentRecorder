@@ -23,7 +23,10 @@ import tables
 
 __all__ = ['VarType', 'VarValue', 'ExperimentWriter']
 
+#: valid types for experiment variables
 VarType = Union[Type[int], Type[float], Type[bool]]
+
+#: valid values for experiment variables
 VarValue = Union[int, float, bool]
 
 _vartype_columns = {
@@ -43,19 +46,50 @@ class UnsupportedVariableType(ExperimentElementError):
 
 
 class ExperimentWriter(abc.ABC):
+    """
+    Class for writing experiment data to an HDF5 file in a structured manner.
+    This class sets up a recursive structure consisting of experiments which
+    contain variable tables and other sub-experiments under it.
+
+    This class is an interface and doesn't have a valid conventional
+    constructor. Instead, users are directed to the ExperimentWriter.create()
+    static method to create a valid instance of this class.
+    """
+
     @property
     @abc.abstractmethod
     def h5file(self) -> tables.File:
+        """
+        Returns
+        -------
+        tables.File
+           The underlying HDF5 file associated with this ExperimentWriter.
+        """
         pass
 
     @property
     @abc.abstractmethod
     def get_id(self) -> str:
+        """
+
+        Returns
+        -------
+        experiment_id
+            The unique ID of this experiment, used to identify it in the HDF5
+            file data structure.
+        """
         pass
 
     @property
     @abc.abstractmethod
     def get_title(self) -> str:
+        """
+
+        Returns
+        -------
+        experiment_title
+            The title, or one-line description of this experiment.
+        """
         pass
 
     @abc.abstractmethod
@@ -63,10 +97,41 @@ class ExperimentWriter(abc.ABC):
                             sub_exp_id: str,
                             variables: Mapping[str, VarType],
                             sub_exp_title: str = '') -> ExperimentWriter:
+        """
+        Create a sub-experiment under the current experiment.
+
+        Parameters
+        ----------
+        sub_exp_id
+            Unique ID of the sub-experiment.
+        variables
+            A mapping, variable_name -> variable_type, indicating the desired
+            variables to store under the sub-experiment.
+        sub_exp_title
+            The title, or one-line description of this sub-experiment.
+
+        Returns
+        -------
+        sub_exp_writer
+            An ExperimentWriter instance.
+        """
         pass
 
     @abc.abstractmethod
     def get_sub_experiment(self, sub_exp_id: str) -> ExperimentWriter:
+        """
+        Look up a sub-experiment by ID.
+
+        Parameters
+        ----------
+        sub_exp_id
+            Unique ID of the sub-experiment.
+
+        Returns
+        -------
+        sub_exp_writer
+            An ExperimentWriter instance.
+        """
         pass
 
     @abc.abstractmethod
@@ -74,14 +139,44 @@ class ExperimentWriter(abc.ABC):
                         name: str,
                         value: VarValue,
                         timestamp: float) -> None:
+        """
+        Record a new value for a registered variable.
+
+        Parameters
+        ----------
+        name
+            Name of the variable to update.
+        value
+            New value to record.
+        timestamp
+            UNIX timestamp for the new value.
+
+        Returns
+        -------
+
+        """
         pass
 
     @abc.abstractmethod
     def close(self) -> None:
+        """
+        Closes this experiment and all associated sub-experiments.
+
+        Returns
+        -------
+
+        """
         pass
 
     @abc.abstractmethod
     def flush(self) -> None:
+        """
+        Flushes this experiment and all associated sub-experiments to disk.
+
+        Returns
+        -------
+
+        """
         pass
 
     def __enter__(self) -> ExperimentWriter:
@@ -96,15 +191,26 @@ class ExperimentWriter(abc.ABC):
                variables: Mapping[str, VarType],
                exp_title: str = '') -> ExperimentWriter:
         """
-        Creates the HDF file and initializes an experiment on it.
+        Initializes an HDF5 file and constructs an experiment using it as the
+        underlying structure.
 
-        TODO
+        Parameters
+        ----------
+        file_path
+            Path to the new HDF5 file. Should not exist, otherwise this
+            a FileExistsError will be raised.
+        exp_id
+            Unique ID for this experiment.
+        variables
+            A mapping, variable_name -> variable_type, indicating the desired
+            variables to store under the experiment.
+        exp_title
+            The title, or one-line description of this experiment.
 
-        :param file_path:
-        :param exp_id:
-        :param variables:
-        :param exp_title:
-        :return:
+        Returns
+        -------
+        exp_writer
+            An ExperimentWriter instance.
         """
 
         # make sure parent folders exist, but file should be new
