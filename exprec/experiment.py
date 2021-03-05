@@ -33,13 +33,13 @@ _vartype_columns = {
 }
 
 
-class UnsupportedVariableType(Exception):
-    def __init__(self, t: Type):
-        super(UnsupportedVariableType, self).__init__(t)
-
-
 class ExperimentElementError(Exception):
     pass
+
+
+class UnsupportedVariableType(ExperimentElementError):
+    def __init__(self, t: Type):
+        super(UnsupportedVariableType, self).__init__(t)
 
 
 class ExperimentWriter(abc.ABC):
@@ -107,13 +107,24 @@ class ExperimentWriter(abc.ABC):
         :return:
         """
 
-        # make sure parent folders exist
+        # make sure parent folders exist, but file should be new
         file_path = Path(file_path)
+        if file_path.exists():
+            # file exists, don't delete but raise an error
+            raise FileExistsError(file_path)
+
         file_path.parent.mkdir(exist_ok=True, parents=True)
         h5 = tables.open_file(str(file_path), mode='a',
                               title='Experiment Data File')
-
-        return _ExperimentWriter(h5, h5.root, exp_id, exp_title, variables)
+        try:
+            return _ExperimentWriter(h5, h5.root, exp_id, exp_title, variables)
+        except ExperimentElementError:
+            # error while creating experiment.
+            # delete the file to avoid leaving junk around
+            # then re-raise error
+            h5.close()
+            file_path.unlink()
+            raise
 
 
 # noinspection PyProtectedMember
@@ -140,13 +151,14 @@ class _ExperimentWriter(ExperimentWriter):
                 path = node._v_pathname
                 if isinstance(node, tables.Group):
                     raise ExperimentElementError('Experiment already exists at'
-                                                 f'{path}.')
+                                                 f'{path} in file {h5file}.')
                 elif isinstance(node, tables.Table):
                     raise ExperimentElementError('Name conflict: variable '
                                                  'table already exists at '
-                                                 f'{path}')
+                                                 f'{path} in file {h5file}')
                 else:
-                    raise ExperimentElementError(f'Conflict at {path}.')
+                    raise ExperimentElementError(f'Conflict at {path} '
+                                                 f'in file {h5file}')
             except tables.NoSuchNodeError as e:
                 raise ExperimentElementError() from e
 
@@ -211,11 +223,14 @@ class _ExperimentWriter(ExperimentWriter):
                         name: str,
                         value: VarValue,
                         timestamp: float) -> None:
-        row = self._var_tables[name].row
-        row['value'] = value
-        row['experiment_time'] = timestamp
-        row['record_time'] = datetime.datetime.now().timestamp()
-        row.append()
+        try:
+            row = self._var_tables[name].row
+            row['value'] = value
+            row['experiment_time'] = timestamp
+            row['record_time'] = datetime.datetime.now().timestamp()
+            row.append()
+        except KeyError:
+            raise ExperimentElementError(f'No such variable {name}.')
 
     def flush(self) -> None:
         # flush everything

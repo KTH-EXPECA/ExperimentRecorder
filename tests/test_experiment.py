@@ -110,3 +110,57 @@ class TestExperiments(unittest.TestCase):
 
         # trying to recreate a sub-experiment should fail
         self.assertRaises(ExperimentElementError, make_sub_exp)
+
+    def test_write_variables(self):
+        # check that values are actually stored correctly
+        file = self.experiment.h5file
+        for var in self.exp_vars_valid:
+            self.experiment.record_variable(var.name, var.value, 0.0)
+
+            # can't store mismatching types
+            # boolean columns seem to coerce everything to
+            # True/False, so they don't raise any TypeErrors
+            if var.type != bool:
+                self.assertRaises(TypeError,
+                                  self.experiment.record_variable,
+                                  var.name, object(), 1)
+
+            # check the value
+            tbl = file.get_node(self.experiment._group, var.name)
+            self.assertIsInstance(tbl, tables.Table)
+            tbl.flush()  # needed since we're gonna read it
+
+            vals = [row['value'] for row in tbl.iterrows()]
+
+            self.assertEqual(var.value, vals[0])
+
+        # can't record variables which weren't registered
+        for var in self.exp_vars_invalid:
+            self.assertRaises(
+                ExperimentElementError,
+                lambda: self.experiment.record_variable(var.name, var.value, 0)
+            )
+
+    def test_dont_overwrite_file(self):
+        # trying to create an experiment on an already existing path should fail
+        with self.assertRaises(FileExistsError):
+            ExperimentWriter.create(
+                file_path=self.h5file_path,
+                exp_id=self.exp_id,
+                exp_title=self.exp_title,
+                variables={}
+            )
+
+    def test_invalid_variables(self):
+        # trying to create an experiment with invalid variable types should fail
+        # and the file should be cleaned up
+        fpath = Path('/tmp/should_not_exist.h5')
+        with self.assertRaises(ExperimentElementError):
+            ExperimentWriter.create(
+                file_path=fpath,
+                exp_id='invalid',
+                exp_title='invalid variable types',
+                variables={var.name: var.type for var in self.exp_vars_invalid}
+            )
+
+        self.assertFalse(fpath.exists())
