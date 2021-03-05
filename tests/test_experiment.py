@@ -164,3 +164,20 @@ class TestExperiments(unittest.TestCase):
             )
 
         self.assertFalse(fpath.exists())
+
+    def test_register_sub_exp_with_name_conflict(self):
+        # trying to register an experiment with the same name as an existing
+        # variable should fail
+        for var in self.exp_vars_valid:
+            self.assertRaises(ExperimentElementError,
+                              self.experiment.make_sub_experiment,
+                              sub_exp_id=var.name,
+                              variables={})
+
+        # registering a valid sub-experiment twice should fail the second time
+        self.experiment.make_sub_experiment(sub_exp_id=self.sub_exp_id,
+                                            variables={})
+        self.assertRaises(ExperimentElementError,
+                          self.experiment.make_sub_experiment,
+                          sub_exp_id=self.sub_exp_id,
+                          variables={})
