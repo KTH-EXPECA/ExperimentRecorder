@@ -12,9 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import setuptools
+import importlib.util
 
-import exprec
+import setuptools
 
 # TODO: readme?
 # with open('./README.md', 'r') as fp:
@@ -23,9 +23,15 @@ import exprec
 with open('./requirements.txt', 'r') as fp:
     reqs = fp.readlines()
 
+# parse the version file
+spec = importlib.util.spec_from_file_location('version',
+                                              './exprec/_version.py')
+version = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(version)
+
 setuptools.setup(
     name='exprec',
-    version=exprec.__version__,
+    version=version.__version__,
     author='KTH Royal Institute of Technology',
     author_email='molguin@kth.se',
     description='Experiment recording library built on top of PyTables and '
