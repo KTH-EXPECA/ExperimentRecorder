@@ -24,7 +24,7 @@ with open('./requirements.txt', 'r') as fp:
     reqs = fp.readlines()
 
 setuptools.setup(
-    name='cleave',
+    name='exprec',
     version=exprec.__version__,
     author='KTH Royal Institute of Technology',
     author_email='molguin@kth.se',
@@ -32,7 +32,7 @@ setuptools.setup(
                 'HDF5.',  # FIXME
     long_description='',  # TODO
     long_description_content_type='text/markdown',
-    url='https://github.com/KTH-EXPECA/ExperimentRecorder',  # FIXME: private
+    url='https://github.com/KTH-EXPECA/ExperimentRecorder',
     packages=setuptools.find_packages(),
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
