@@ -63,6 +63,7 @@ class TestExperiments(unittest.TestCase):
         # flush, close and delete the file
         self.experiment.flush()
         self.experiment.close()
+        self.assertFalse(self.experiment.h5file.isopen)
         self.h5file_path.unlink(missing_ok=False)
 
     def test_experiment_creation(self):

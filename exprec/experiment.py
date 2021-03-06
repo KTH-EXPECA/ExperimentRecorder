@@ -223,7 +223,11 @@ class ExperimentWriter(abc.ABC):
         h5 = tables.open_file(str(file_path), mode='a',
                               title='Experiment Data File')
         try:
-            return _ExperimentWriter(h5, h5.root, exp_id, exp_title, variables)
+            return _TopLevelExperimentWriter(h5,
+                                             h5.root,
+                                             exp_id,
+                                             exp_title,
+                                             variables)
         except ExperimentElementError:
             # error while creating experiment.
             # delete the file to avoid leaving junk around
