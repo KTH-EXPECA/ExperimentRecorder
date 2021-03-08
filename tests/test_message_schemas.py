@@ -13,7 +13,7 @@
 #  limitations under the License.
 from __future__ import annotations
 
-import unittest
+from twisted.trial import unittest
 from typing import Callable
 
 from exprec.messages import InvalidMessageError, validate_message

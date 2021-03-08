@@ -1,4 +1,4 @@
-twisted
+Twisted
 click
 msgpack
 tables
