@@ -5,3 +5,4 @@ tables
 numpy
 pandas
 scipy
+schema
