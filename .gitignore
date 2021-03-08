@@ -308,3 +308,4 @@ pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/vscode,pycharm+all,jetbrains+all,python,virtualenv
 
+_trial_temp/
