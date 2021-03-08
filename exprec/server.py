@@ -20,6 +20,22 @@ from .messages import InvalidMessageError, MESSAGE_TYPES, make_message, \
     validate_message
 
 
+class HandlerCallback:
+    def __init__(self, callback: Callable, unpack: bool = False):
+        super(HandlerCallback, self).__init__()
+        self._cb = callback
+        self._unpack = unpack
+
+    def __call__(self, payload: Mapping[str, Any]):
+        if self._unpack:
+            return self._cb(**payload)
+        else:
+            return self._cb(payload)
+
+    def call(self, payload: Mapping):
+        return self(payload)
+
+
 class MessageProtocol(Protocol):
     """
     Handles the base conversion of msgpack messages into dictionaries of a
@@ -33,7 +49,7 @@ class MessageProtocol(Protocol):
 
     def __init__(self):
         super(MessageProtocol, self).__init__()
-        self._handlers: Dict[str, Callable] = {}
+        self._handlers: Dict[str, HandlerCallback] = {}
         self._unpacker = msgpack.Unpacker()
 
     def connectionMade(self):
@@ -50,7 +66,7 @@ class MessageProtocol(Protocol):
         for msg_dict in self._unpacker:
             try:
                 mtype, payload = validate_message(msg_dict)
-                self._handlers.get(mtype, self._default_handler)(payload)
+                self._handlers.get(mtype, self._default_handler).call(payload)
             except InvalidMessageError as e:
                 reply = make_message('status', {
                     'success': False,
@@ -67,7 +83,7 @@ class MessageProtocol(Protocol):
                 reply = make_message('status', {'success': True})
             self._send(reply)
 
-    def handler(self, msg_type: str):
+    def handler(self, msg_type: str, unpack: bool = False):
         """
         Decorator to register a handler for a message type.
 
@@ -75,6 +91,9 @@ class MessageProtocol(Protocol):
         ----------
         msg_type
             The message type handled by the wrapped function.
+        unpack
+            Whether to unpack the message payload into keyword arguments when
+            calling this handler.
 
         Returns
         -------
@@ -86,16 +105,18 @@ class MessageProtocol(Protocol):
         assert msg_type in MESSAGE_TYPES
 
         def wrapper(fn: Callable[..., None]) -> None:
-            self._handlers[msg_type] = fn
+            self._handlers[msg_type] = HandlerCallback(fn, unpack=unpack)
 
         return wrapper
 
-    def _default_handler(self, payload: Mapping[str, Any]) -> None:
+    def _default_handler_fn(self, payload: Mapping[str, Any]) -> None:
         reply = make_message('status', {
             'success': False,
             'error'  : 'No registered handler for this message type.'
         })
         self._send(reply)
+
+    _default_handler = HandlerCallback(_default_handler_fn)
 
     def _send(self, o: Any) -> None:
         msgpack.pack(o, self.transport)
