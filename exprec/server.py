@@ -11,13 +11,45 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-from typing import Any, Callable, Dict, Mapping
+from typing import Any, Callable, Dict, Mapping, Tuple
 
 import msgpack
-from twisted.internet.protocol import Protocol
+from twisted.internet.protocol import Factory, Protocol
 
 from .messages import InvalidMessageError, MESSAGE_TYPES, make_message, \
     validate_message
+
+
+# msgpack needs special code to pack/unpack int, float and bool types
+# into strings
+class MessagePacker(msgpack.Packer):
+    @staticmethod
+    def encode_vartype(obj: Any) -> Mapping[str, Any]:
+        if isinstance(obj, type(int)):
+            return {'__vartype__': 'int'}
+        elif isinstance(obj, type(float)):
+            return {'__vartype__': 'float'}
+        elif isinstance(obj, type(bool)):
+            return {'__vartype__': 'bool'}
+        else:
+            return obj
+
+    def __init__(self, *args, **kwargs):
+        kwargs['default'] = self.encode_vartype
+        super(MessagePacker, self).__init__(*args, **kwargs)
+
+
+class MessageUnpacker(msgpack.Unpacker):
+    @staticmethod
+    def decode_vartype(data: Any) -> Any:
+        try:
+            return eval(data['__vartype__'])
+        except:
+            return data
+
+    def __init__(self, *args, **kwargs):
+        kwargs['object_hook'] = self.decode_vartype
+        super(MessageUnpacker, self).__init__(*args, **kwargs)
 
 
 class HandlerCallback:
@@ -50,7 +82,9 @@ class MessageProtocol(Protocol):
     def __init__(self):
         super(MessageProtocol, self).__init__()
         self._handlers: Dict[str, HandlerCallback] = {}
-        self._unpacker = msgpack.Unpacker()
+
+        self._unpacker = MessageUnpacker()
+        self._packer = MessagePacker()
 
     def connectionMade(self):
         version_msg = make_message('version',
@@ -118,5 +152,14 @@ class MessageProtocol(Protocol):
 
     _default_handler = HandlerCallback(_default_handler_fn)
 
+    # noinspection PyArgumentList
     def _send(self, o: Any) -> None:
-        msgpack.pack(o, self.transport)
+        self.transport.write(self._packer.pack(o))
+
+
+class _MsgProtocolFactory(Factory):
+    def buildProtocol(self, addr: Tuple[str, int]) -> Protocol:
+        return MessageProtocol()
+
+
+msg_protocol_factory = _MsgProtocolFactory()
