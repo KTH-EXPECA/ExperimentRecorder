@@ -16,7 +16,7 @@ from __future__ import annotations
 import unittest
 from typing import Callable
 
-from exprec.schemas import InvalidMessageError, validate_message
+from exprec.messages import InvalidMessageError, validate_message
 
 valid_payloads = {
     'version': {

@@ -13,7 +13,7 @@
 #  limitations under the License.
 from typing import Any, Mapping, NamedTuple, Tuple
 
-from schema import Or, Schema, SchemaError
+from schema import Optional, Or, Schema, SchemaError
 
 _msg_payload_schemas = {
     'version': {
@@ -37,7 +37,7 @@ _msg_payload_schemas = {
     },
     'status' : {
         'success'                         : bool,
-        Or('info', 'error', only_one=True): str
+        Optional(Or('info', 'error', only_one=True)): str
     }
 }
 
@@ -61,3 +61,15 @@ def validate_message(msg: Mapping[str, Any]) \
         return _ValidMessage(mtype, Schema(payload_schema).validate(payload))
     except (KeyError, SchemaError):
         raise InvalidMessageError(msg)
+
+
+def make_message(msg_type: str,
+                 payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    mtype, payload = validate_message({'type': msg_type, 'payload': payload})
+    return {
+        'type'   : mtype,
+        'payload': payload
+    }
+
+
+MESSAGE_TYPES = set(_msg_payload_schemas.keys())

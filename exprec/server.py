@@ -11,62 +11,91 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-from typing import Any, Mapping
+from typing import Any, Callable, Dict, Mapping
 
 import msgpack
 from twisted.internet.protocol import Protocol
 
-from exprec import ExperimentWriter
+from .messages import InvalidMessageError, MESSAGE_TYPES, make_message, \
+    validate_message
 
 
-class ExperimentLoggingServerProtocol(Protocol):
+class MessageProtocol(Protocol):
+    """
+    Handles the base conversion of msgpack messages into dictionaries of a
+    specific form and the delegation of tasks to registered callbacks.
+    """
+
     #: protocol version
     #: TODO: in the future, deal with version mismatch
     version_major = 1
     version_minor = 0
 
-    def __init__(self, top_lvl_exp: ExperimentWriter):
-        super(ExperimentLoggingServerProtocol, self).__init__()
+    def __init__(self):
+        super(MessageProtocol, self).__init__()
+        self._handlers: Dict[str, Callable] = {}
         self._unpacker = msgpack.Unpacker()
-        self._top_lvl_experiment = top_lvl_exp
-        self._exp = None
 
-        self._msg_type_handlers = {
-            'record': self._handle_record_msg,
-            'finish': self._handle_finish_msg,
-        }
-
-    def connectionMade(self) -> None:
-        # send version information
-        msgpack.dump({
-            'version': {
-                'major': self.version_major,
-                'minor': self.version_minor
-            }
-        }, self.transport)
+    def connectionMade(self):
+        version_msg = make_message('version',
+                                   {
+                                       'major': self.version_major,
+                                       'minor': self.version_minor
+                                   })
+        self._send(version_msg)
 
     def dataReceived(self, data: bytes) -> None:
         self._unpacker.feed(data)
+        # TODO: log
         for msg_dict in self._unpacker:
-            if self._exp is None:
-                # still waiting for initialization of sub exp
-                # TODO
-                pass
+            try:
+                mtype, payload = validate_message(msg_dict)
+                self._handlers.get(mtype, self._default_handler)(payload)
+            except InvalidMessageError as e:
+                reply = make_message('status', {
+                    'success': False,
+                    'error'  : 'Invalid message.'
+                })
+            except Exception as e:
+                # if anything fails in the handler, we send a fail status msg
+                reply = make_message('status', {
+                    'success': False,
+                    'error'  : 'Error while processing request.'
+                })
             else:
-                try:
-                    self._msg_type_handlers.get(
-                        msg_dict['type'],
-                        self._handle_invalid_msg
-                    )(payload=msg_dict['payload'])
-                except KeyError:
-                    # TODO: handle malformed message
-                    pass
+                # if everything goes right, we send a success status msg
+                reply = make_message('status', {'success': True})
+            self._send(reply)
 
-    def _handle_record_msg(self, payload: Mapping[str, Any]) -> None:
-        pass
+    def handler(self, msg_type: str):
+        """
+        Decorator to register a handler for a message type.
 
-    def _handle_finish_msg(self, payload: Mapping[str, Any]) -> None:
-        pass
+        Parameters
+        ----------
+        msg_type
+            The message type handled by the wrapped function.
 
-    def _handle_invalid_msg(self, msg: Mapping[str, Any]) -> None:
-        pass
+        Returns
+        -------
+        wrapper
+            A decorator for registering a handler for the specified message
+            type.
+        """
+
+        assert msg_type in MESSAGE_TYPES
+
+        def wrapper(fn: Callable[..., None]) -> None:
+            self._handlers[msg_type] = fn
+
+        return wrapper
+
+    def _default_handler(self, payload: Mapping[str, Any]) -> None:
+        reply = make_message('status', {
+            'success': False,
+            'error'  : 'No registered handler for this message type.'
+        })
+        self._send(reply)
+
+    def _send(self, o: Any) -> None:
+        msgpack.pack(o, self.transport)
