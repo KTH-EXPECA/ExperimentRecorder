@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from typing import Callable
 
+from twisted.internet.protocol import Factory
 from twisted.test import proto_helpers
 from twisted.trial import unittest
 
 from exprec.messages import validate_message
-from exprec.server import MessagePacker, MessageProtocol, MessageUnpacker, \
-    msg_protocol_factory
+from exprec.protocol import MessagePacker, MessageProtocol, MessageUnpacker
 from .test_message_schemas import valid_payloads
 
 
@@ -93,7 +93,8 @@ class DynamicTestsMeta(type):
 class TestProtocol(unittest.TestCase, metaclass=DynamicTestsMeta):
     def setUp(self) -> None:
         addr = ('0.0.0.0', 0)
-        self.proto: MessageProtocol = msg_protocol_factory.buildProtocol(addr)
+        factory = Factory.forProtocol(MessageProtocol)
+        self.proto: MessageProtocol = factory.buildProtocol(addr)
         self.transport = proto_helpers.StringTransport()
         self.proto.makeConnection(self.transport)
 

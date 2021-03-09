@@ -14,8 +14,10 @@
 from typing import Any, Callable, Dict, Mapping, Tuple
 
 import msgpack
+from twisted.internet.interfaces import IReactorThreads
 from twisted.internet.protocol import Factory, Protocol
 
+from .experiment import ExperimentWriter
 from .messages import InvalidMessageError, MESSAGE_TYPES, make_message, \
     validate_message
 
@@ -68,6 +70,14 @@ class HandlerCallback:
         return self(payload)
 
 
+class Finish(Exception):
+    pass
+
+
+class NoHandlerError(Exception):
+    pass
+
+
 class MessageProtocol(Protocol):
     """
     Handles the base conversion of msgpack messages into dictionaries of a
@@ -98,9 +108,21 @@ class MessageProtocol(Protocol):
         self._unpacker.feed(data)
         # TODO: log
         for msg_dict in self._unpacker:
+            disconnect = False
             try:
                 mtype, payload = validate_message(msg_dict)
                 self._handlers.get(mtype, self._default_handler).call(payload)
+            except NoHandlerError:
+                reply = make_message('status', {
+                    'success': False,
+                    'error'  : 'No registered handler for this message type.'
+                })
+                disconnect = True
+            except Finish:
+                # finish exception
+                # send a success reply, then lose the connection
+                reply = make_message('status', {'success': True})
+                disconnect = True
             except InvalidMessageError as e:
                 reply = make_message('status', {
                     'success': False,
@@ -110,12 +132,17 @@ class MessageProtocol(Protocol):
                 # if anything fails in the handler, we send a fail status msg
                 reply = make_message('status', {
                     'success': False,
-                    'error'  : 'Error while processing request.'
+                    'error'  : 'Internal error.'
                 })
+                disconnect = True
             else:
                 # if everything goes right, we send a success status msg
                 reply = make_message('status', {'success': True})
-            self._send(reply)
+            finally:
+                self._send(reply)
+                if disconnect:
+                    self.transport.loseConnection()
+                    self._handlers.clear()
 
     def handler(self, msg_type: str, unpack: bool = False):
         """
@@ -144,11 +171,7 @@ class MessageProtocol(Protocol):
         return wrapper
 
     def _default_handler_fn(self, payload: Mapping[str, Any]) -> None:
-        reply = make_message('status', {
-            'success': False,
-            'error'  : 'No registered handler for this message type.'
-        })
-        self._send(reply)
+        raise NoHandlerError()
 
     _default_handler = HandlerCallback(_default_handler_fn)
 
@@ -157,9 +180,49 @@ class MessageProtocol(Protocol):
         self.transport.write(self._packer.pack(o))
 
 
-class _MsgProtocolFactory(Factory):
+class MessageProtoFactory(Factory):
+    def __init__(self, exp: ExperimentWriter, threads: IReactorThreads):
+        self._exp = exp
+        self._proto_exp: Dict[MessageProtocol, ExperimentWriter] = {}
+        self._threads = threads
+
+    def make_init_handler(self, proto: MessageProtocol) -> Callable:
+        # wrap the proto to assign handlers
+        def handler(experiment_id: str,
+                    variables: Mapping = {},
+                    experiment_title: str = '') -> None:
+            # initialize a sub_experiment and assign handler
+            sub_exp = self._exp.make_sub_experiment(
+                sub_exp_id=experiment_id,
+                variables=variables,
+                sub_exp_title=experiment_title
+            )
+
+            @proto.handler('record', unpack=True)
+            def update_variables(experiment_id: str,
+                                 variables: Mapping[str, Any]) -> None:
+                assert experiment_id == sub_exp.get_id
+                for var_name, upd_dict in variables.items():
+                    sub_exp.record_variable(name=var_name, **upd_dict)
+
+            # store proto and exp
+            self._proto_exp[proto] = sub_exp
+
+        return handler
+
+    def make_finish_handler(self, proto: MessageProtocol) -> Callable:
+        def handler(experiment_id: str) -> None:
+            sub_exp = self._proto_exp.pop(proto)
+            assert experiment_id == sub_exp.get_id
+            self._threads.callInThread(sub_exp.close)
+
+            raise Finish()
+
+        return handler
+
     def buildProtocol(self, addr: Tuple[str, int]) -> Protocol:
-        return MessageProtocol()
+        proto = MessageProtocol()
+        proto.handler('init', unpack=True)(self.make_init_handler(proto))
+        proto.handler('finish', unpack=True)(self.make_finish_handler(proto))
 
-
-msg_protocol_factory = _MsgProtocolFactory()
+        return proto

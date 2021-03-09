@@ -22,6 +22,7 @@ _msg_payload_schemas = {
     },
     'init'   : {
         'experiment_id': str,
+        Optional('experiment_title'): str,
         'variables'    : {
             str: Or(type(int), type(float), type(bool))
         }
