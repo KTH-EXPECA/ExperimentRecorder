@@ -98,9 +98,11 @@ class ExperimentInstance(Base):
                 primary_key=True,
                 default=uuid.uuid4,
                 nullable=False)
-    timestamp = Column(DateTime,
-                       nullable=False,
-                       default=datetime.datetime.now)
+    start = Column(DateTime,
+                   nullable=False,
+                   default=datetime.datetime.now)
+    end = Column(DateTime,
+                 nullable=True)
 
     experiment_metadata = relationship('ExperimentMetadata',
                                        order_by='ExperimentMetadata.label',

@@ -11,34 +11,27 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import datetime
+import uuid
 from typing import Any, Mapping, NamedTuple, Tuple
 
 from schema import Optional, Or, Schema, SchemaError
 
-_msg_payload_schemas = {
+_valid_msg_type_schemas = {
     'version': {
         'major': int,
         'minor': int
     },
-    'init'   : {
-        'experiment_id': str,
-        Optional('experiment_title'): str,
-        'variables'    : {
-            str: Or(type(int), type(float), type(bool))
-        }
-    },
-    'finish' : {
-        'experiment_id': str
+    'status' : {
+        'success'                                   : bool,
+        Optional(Or('info', 'error', only_one=True)): str
     },
     'record' : {
-        'experiment_id': str,
-        'variables'    : {
-            str: {'value': Or(int, float, bool), 'timestamp': float}
-        }
+        'timestamp': datetime.datetime,  # let the protocol handle this
+        'variables': {str: object}  # variables can be whatever
     },
-    'status' : {
-        'success'                         : bool,
-        Optional(Or('info', 'error', only_one=True)): str
+    'welcome': {
+        'instance_id': uuid.UUID  # let the protocol handle this
     }
 }
 
@@ -57,11 +50,11 @@ def validate_message(msg: Mapping[str, Any]) \
     try:
         mtype = msg['type']
         payload = msg['payload']
-        payload_schema = _msg_payload_schemas[mtype]
+        payload_schema = _valid_msg_type_schemas[mtype]
 
         return _ValidMessage(mtype, Schema(payload_schema).validate(payload))
-    except (KeyError, SchemaError):
-        raise InvalidMessageError(msg)
+    except (KeyError, SchemaError) as e:
+        raise InvalidMessageError(msg) from e
 
 
 def make_message(msg_type: str,
@@ -71,6 +64,3 @@ def make_message(msg_type: str,
         'type'   : mtype,
         'payload': payload
     }
-
-
-MESSAGE_TYPES = set(_msg_payload_schemas.keys())

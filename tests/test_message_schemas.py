@@ -13,8 +13,11 @@
 #  limitations under the License.
 from __future__ import annotations
 
-from twisted.trial import unittest
+import datetime
+import uuid
 from typing import Callable
+
+from twisted.trial import unittest
 
 from exprec.messages import InvalidMessageError, validate_message
 
@@ -23,24 +26,16 @@ valid_payloads = {
         'major': 13,
         'minor': 12
     },
-    'init'   : {
-        'experiment_id': 'test_experiment',
-        'variables'    : {'a': int, 'b': float, 'c': bool}
-    },
-    'finish' : {
-        'experiment_id': 'test_experiment'
-    },
     'status' : {
         'success': True,
-        'info'   : 'Success status!'
+        'info'   : 'Success status'
     },
     'record' : {
-        'experiment_id': 'test_experiment',
-        'variables'    : {
-            'a': {'value': 1927, 'timestamp': 13.37},
-            'b': {'value': 1.21, 'timestamp': 13.37},
-            'c': {'value': False, 'timestamp': 13.37}
-        }
+        'timestamp': datetime.datetime.now(),  # let the protocol handle this
+        'variables': {'a': 666}
+    },
+    'welcome': {
+        'instance_id': uuid.uuid4()  # let the protocol handle this
     }
 }
 
