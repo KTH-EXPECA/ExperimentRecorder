@@ -6,3 +6,5 @@ numpy
 pandas
 scipy
 schema
+importlib_resources
+SQLAlchemy
