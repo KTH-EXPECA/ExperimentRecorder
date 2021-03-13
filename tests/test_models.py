@@ -15,6 +15,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm.exc import FlushError
 from twisted.trial import unittest
 
 from exprec.models import *
@@ -128,3 +129,52 @@ class TestDBModels(unittest.TestCase):
         self._session.commit()
 
         self.assertEqual(len(instance.variables), 2)
+
+        return variable3
+
+    def test_record(self):
+        # verify we can't create records for invalid variables
+        with self.assertRaises(IntegrityError):
+            record = VariableRecord(
+                variable_id=uuid.uuid4(),
+                timestamp=datetime.datetime.now(),
+                value=666
+            )
+
+            self._session.add(record)
+            self._session.commit()
+        self._session.rollback()
+
+        # create a valid record
+        variable = self.test_variable()
+        timestamp = datetime.datetime.now()
+        record = VariableRecord(
+            variable_id=variable.id,
+            timestamp=timestamp,
+            value=666
+        )
+
+        self._session.add(record)
+        self._session.commit()
+
+        # verify we can't create two records with the same timestamp
+        with self.assertRaises(FlushError):
+            record2 = VariableRecord(
+                variable_id=variable.id,
+                timestamp=timestamp,
+                value=1337
+            )
+
+            self._session.add(record2)
+            self._session.commit()
+        self._session.rollback()
+
+        # but records with different timestamps are fine
+        record = VariableRecord(
+            variable_id=variable.id,
+            timestamp=datetime.datetime.now(),
+            value=666
+        )
+
+        self._session.add(record)
+        self._session.commit()
