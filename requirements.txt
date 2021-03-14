@@ -8,3 +8,4 @@ schema
 importlib_resources
 SQLAlchemy
 contextlib2
+toml
