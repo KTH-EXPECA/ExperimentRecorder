@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from twisted.trial import unittest
 
 from exprec.exp_interface import BufferedExperimentInterface
@@ -20,7 +22,13 @@ from exprec.models import *
 class TestBufferedDBAccess(unittest.TestCase):
     def setUp(self) -> None:
         self._buf_size = 10
-        self._interface = BufferedExperimentInterface(buf_size=self._buf_size)
+        self._engine = create_engine(
+            'sqlite:///:memory:',
+            connect_args={'check_same_thread': False},
+            poolclass=StaticPool)
+
+        self._interface = BufferedExperimentInterface(buf_size=self._buf_size,
+                                                      db_engine=self._engine)
         self._session = self._interface.session
 
     def tearDown(self) -> None:

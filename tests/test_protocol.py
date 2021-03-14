@@ -17,6 +17,8 @@ import datetime
 import time
 import uuid
 
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from twisted.test import proto_helpers
 from twisted.trial import unittest
 
@@ -50,7 +52,12 @@ class TestMessagePacking(unittest.TestCase):
 class TestProtocol(unittest.TestCase):
     def setUp(self) -> None:
         addr = ('dummy', 0)
-        self._interface = BufferedExperimentInterface()
+        self._engine = create_engine(
+            'sqlite:///:memory:',
+            connect_args={'check_same_thread': False},
+            poolclass=StaticPool)
+
+        self._interface = BufferedExperimentInterface(db_engine=self._engine)
         factory = MessageProtoFactory(self._interface)
 
         self.proto: MessageProtocol = factory.buildProtocol(addr)

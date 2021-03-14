@@ -16,9 +16,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
-from sqlalchemy.pool import Pool, StaticPool
 
 from .models import *
 
@@ -33,12 +31,13 @@ class VarUpdate:
 
 class BufferedExperimentInterface:
     def __init__(self,
-                 db_address: str = 'sqlite:///:memory:',
-                 buf_size: int = 100,
-                 poolclass: Pool = StaticPool):
-        self._engine = create_engine(db_address,
-                                     connect_args={'check_same_thread': False},
-                                     poolclass=poolclass)
+                 db_engine: Engine,
+                 buf_size: int = 100):
+        # self._engine = create_engine(db_address,
+        #                              connect_args={'check_same_thread':
+        #                              False},
+        #                              poolclass=poolclass)
+        self._engine = db_engine
         Base.metadata.create_all(self._engine)
         self._session_fact = scoped_session(sessionmaker(bind=self._engine))
 
