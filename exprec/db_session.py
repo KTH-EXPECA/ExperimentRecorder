@@ -16,7 +16,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from queue import Empty, PriorityQueue, Queue
-from typing import Any, Callable, Collection, Iterable, Mapping, Optional
+from typing import Any, Callable, Collection, Iterable, Mapping, Optional, Tuple
 
 from contextlib2 import contextmanager
 from sqlalchemy.engine import create_engine
@@ -40,11 +40,15 @@ def session_context(scoped: scoped_session) -> Session:
         session.close()
 
 
-class DBInstCreationPromise:
+class SessionContextPromise:
     def __init__(self,
-                 fn: Callable[[Session], Base],
-                 return_attributes: Collection[str]):
+                 fn: Callable[[Session, ...], Optional[Base]],
+                 return_attributes: Collection[str] = (),
+                 fn_args: Tuple = (),
+                 fn_kwargs: Mapping[str, Any] = {}):
         self._fn = fn
+        self._args = fn_args
+        self._kwargs = fn_kwargs
         self._ret_attr = return_attributes
 
         self._cond = threading.Condition()
@@ -56,8 +60,8 @@ class DBInstCreationPromise:
         with self._cond:
             return self._has_result
 
-    def _make_instance(self, session: Session) -> Base:
-        return self._fn(session)
+    def _call_fn(self, session: Session) -> Optional[Base]:
+        return self._fn(session, *self._args, **self._kwargs)
 
     def _set_ret_attr_from_instance(self, inst: Base) -> None:
         with self._cond:
@@ -81,7 +85,7 @@ class DBInstCreationPromise:
 class _PrioQueueElement:
     priority: int
     timestamp: float
-    promise: DBInstCreationPromise = field(compare=False)
+    promise: SessionContextPromise = field(compare=False)
 
 
 # noinspection PyPep8Naming
@@ -97,7 +101,7 @@ class ExperimentWriterThread(threading.Thread):
         self._buf_size = buf_size
 
         # use a priority queue to always yield urgent instances first
-        self._instances: Queue[_PrioQueueElement] = PriorityQueue()
+        self._queue: Queue[_PrioQueueElement] = PriorityQueue()
 
         self._shutdown = threading.Event()
         self._shutdown.clear()
@@ -106,11 +110,14 @@ class ExperimentWriterThread(threading.Thread):
         self._t_exception = None
 
     def urgent_create(self,
-                      fn: Callable[[Session], Base],
+                      fn: Callable[[Session, ...], Base],
                       return_attributes: Collection[str],
-                      timeout: float = 0.1) -> Mapping[str, Any]:
-        promise = DBInstCreationPromise(fn, return_attributes)
-        self._instances.put(_PrioQueueElement(
+                      timeout: float = 0.1,
+                      fn_args: Tuple = (),
+                      fn_kwargs: Mapping[str, Any] = {}) \
+            -> Mapping[str, Any]:
+        promise = SessionContextPromise(fn, return_attributes)
+        self._queue.put(_PrioQueueElement(
             priority=self.urgent_prio,
             timestamp=time.monotonic(),
             promise=promise
@@ -118,11 +125,11 @@ class ExperimentWriterThread(threading.Thread):
         return promise.get_result(timeout=timeout)
 
     def relaxed_create(self,
-                       fn: Callable[[Session], Base],
+                       fn: Callable[[Session, ...], Base],
                        return_attributes: Collection[str]) \
-            -> DBInstCreationPromise:
-        promise = DBInstCreationPromise(fn, return_attributes)
-        self._instances.put(_PrioQueueElement(
+            -> SessionContextPromise:
+        promise = SessionContextPromise(fn, return_attributes)
+        self._queue.put(_PrioQueueElement(
             priority=self.relaxed_prio,
             timestamp=time.monotonic(),
             promise=promise
@@ -141,15 +148,19 @@ class ExperimentWriterThread(threading.Thread):
 
     def run(self) -> None:
         # parallel execution thread.
+        # prepare the db
         engine = create_engine(self._db_address)
         scoped = scoped_session(sessionmaker(bind=engine))
+        Base.metadata.create_all(engine)
+
+        # buffer
         op_buf = deque(maxlen=self._buf_size)
 
         # noinspection PyProtectedMember
-        def _add_commit_all(promises: Iterable[DBInstCreationPromise]) \
+        def _add_commit_all(promises: Iterable[SessionContextPromise]) \
                 -> None:
             with session_context(scoped) as sess:
-                instances = [p._make_instance(sess) for p in promises]
+                instances = [p._call_fn(sess) for p in promises]
                 sess.add_all(instances)
                 sess.commit()
 
@@ -159,7 +170,7 @@ class ExperimentWriterThread(threading.Thread):
         try:
             while not self._shutdown.is_set():
                 try:
-                    q_elem = self._instances.get(timeout=0.1)
+                    q_elem = self._queue.get(timeout=0.1)
                 except Empty:
                     continue
 
@@ -180,7 +191,7 @@ class ExperimentWriterThread(threading.Thread):
             op_buf.clear()
             try:
                 while True:
-                    rem.append(self._instances.get_nowait())
+                    rem.append(self._queue.get_nowait())
             except Empty:
                 pass
 
