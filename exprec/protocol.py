@@ -18,14 +18,13 @@ import uuid
 from typing import Any, Mapping, Tuple
 
 import msgpack
-from sqlalchemy.orm import Session
 from twisted.internet.protocol import Factory, Protocol
 
-from .messages import InvalidMessageError, make_message, validate_message
-from .models import ExperimentInstance
-
-
+from .exp_interface import BufferedExperimentInterface
 # msgpack needs special code to pack/unpack datetimes and uuids
+from .messages import InvalidMessageError, make_message, validate_message
+
+
 class MessagePacker(msgpack.Packer):
     @staticmethod
     def encode_vartype(obj: Any) -> Mapping[str, Any]:
@@ -58,24 +57,19 @@ class MessageUnpacker(msgpack.Unpacker):
 
 # ---
 
-
 class MessageProtocol(Protocol):
     #: protocol version
     #: TODO: in the future, deal with version mismatch
     version_major = 1
     version_minor = 0
 
-    def __init__(self, session: Session):
+    def __init__(self, interface: BufferedExperimentInterface):
         super(MessageProtocol, self).__init__()
         self._unpacker = MessageUnpacker()
         self._packer = MessagePacker()
 
-        self._session = session
-
-        self._exp_instance = ExperimentInstance()
-
-        self._session.add(self._exp_instance)
-        self._session.commit()
+        self._interface = interface
+        self._experiment_id = self._interface.new_experiment_instance()
 
     def connectionMade(self):
         # send version message and instance id
@@ -85,32 +79,57 @@ class MessageProtocol(Protocol):
         })
         self._send(version_msg)
 
-        inst_msg = make_message('welcome', {'instance_id': self._instance.id})
+        inst_msg = make_message('welcome', {'instance_id': self._experiment_id})
         self._send(inst_msg)
+
+    # multiple connections share same interface, don't close it
+    # def connectionLost(self, reason: failure.Failure = connectionDone):
+    #     self._interface.close()
 
     # noinspection PyArgumentList
     def _send(self, o: Any) -> None:
         self.transport.write(self._packer.pack(o))
+
+    def _handle_metadata_msg(self, msg: Mapping[str, str]) -> None:
+        self._interface.add_metadata(experiment_id=self._experiment_id, **msg)
+        ret_msg = make_message('status', {'success': True})
+        self._send(ret_msg)
+
+    def _handle_record_msg(self, msg: Mapping[str, Any]) -> None:
+        timestamp = msg['timestamp']
+        variables = msg['variables']
+        self._interface.record_variables(
+            experiment_id=self._experiment_id,
+            timestamp=timestamp,
+            **variables
+        )
+        ret_msg = make_message('status', {
+            'success': True,
+            'info'   : {'recorded': len(variables)}
+        })
+        self._send(ret_msg)
 
     def dataReceived(self, data: bytes):
         self._unpacker.feed(data)
         for msg in self._unpacker:
             try:
                 msg_type, payload = validate_message(msg)
-                assert msg_type == 'record'
-            except (InvalidMessageError, AssertionError):
+                if msg_type == 'metadata':
+                    self._handle_metadata_msg(payload)
+                elif msg_type == 'record':
+                    self._handle_record_msg(payload)
+                else:
+                    raise InvalidMessageError()
+            except InvalidMessageError:
                 error_msg = make_message('status',
                                          {'error': 'Invalid message.'})
                 self._send(error_msg)
                 continue
 
-            for var_name, var_value in payload.items():
-
-
 
 class MessageProtoFactory(Factory):
-    def __init__(self, session: Session):
-        self._db_session = session
+    def __init__(self, interface: BufferedExperimentInterface):
+        self._interface = interface
 
-    def buildProtocol(self, addr: Tuple[str, int]) -> Protocol:
-        return MessageProtocol(self._db_session)
+    def buildProtocol(self, addr: Tuple[str, int]) -> MessageProtocol:
+        return MessageProtocol(self._interface)

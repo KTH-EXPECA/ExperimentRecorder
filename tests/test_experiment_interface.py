@@ -59,26 +59,25 @@ class TestBufferedDBAccess(unittest.TestCase):
             self.assertEqual(mdata.label, k)
             self.assertEqual(mdata.value, v)
 
-    def check_deferred_var_record(self) -> None:
+    def test_deferred_var_record(self) -> None:
         # variable recordings should be buffered
         assert self._buf_size > 1
 
         exp_id = self.test_make_experiment()
 
         # single update should not be flushed
-        self._interface.record_variable(
+        self._interface.record_variables(
             experiment_id=exp_id,
-            name='variable',
-            value=0,
-            timestamp=datetime.datetime.now()
+            timestamp=datetime.datetime.now(),
+            variable=1
         )
 
         # check that variable is indeed not in database
-        records = self._session\
+        records = self._session \
             .query(VariableRecord) \
             .all()
 
-        self.assertIsNone(records)
+        self.assertEqual(len(records), 0)
 
         # flush
         self._interface.flush(blocking=True)
@@ -94,11 +93,10 @@ class TestBufferedDBAccess(unittest.TestCase):
 
         # check automatic flushing
         for i in range(self._buf_size):
-            self._interface.record_variable(
+            self._interface.record_variables(
                 experiment_id=exp_id,
-                name='variable',
-                value=i,
-                timestamp=datetime.datetime.now()
+                timestamp=datetime.datetime.now(),
+                variable=i,
             )
         self._interface.wait_for_flush()
 
@@ -108,6 +106,3 @@ class TestBufferedDBAccess(unittest.TestCase):
 
         self.assertIsNotNone(records)
         self.assertEqual(len(records), self._buf_size + 1)
-
-
-

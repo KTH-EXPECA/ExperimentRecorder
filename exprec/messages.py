@@ -18,21 +18,22 @@ from typing import Any, Mapping, NamedTuple, Tuple
 from schema import Optional, Or, Schema, SchemaError
 
 _valid_msg_type_schemas = {
-    'version': {
+    'version' : {
         'major': int,
         'minor': int
     },
-    'status' : {
+    'status'  : {
         'success'                                   : bool,
-        Optional(Or('info', 'error', only_one=True)): str
+        Optional(Or('info', 'error', only_one=True)): object
     },
-    'record' : {
+    'record'  : {
         'timestamp': datetime.datetime,  # let the protocol handle this
         'variables': {str: object}  # variables can be whatever
     },
-    'welcome': {
+    'welcome' : {
         'instance_id': uuid.UUID  # let the protocol handle this
-    }
+    },
+    'metadata': {Optional(str): str}
 }
 
 

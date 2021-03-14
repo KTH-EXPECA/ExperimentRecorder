@@ -22,20 +22,24 @@ from twisted.trial import unittest
 from exprec.messages import InvalidMessageError, validate_message
 
 valid_payloads = {
-    'version': {
+    'version' : {
         'major': 13,
         'minor': 12
     },
-    'status' : {
+    'status'  : {
         'success': True,
         'info'   : 'Success status'
     },
-    'record' : {
+    'record'  : {
         'timestamp': datetime.datetime.now(),  # let the protocol handle this
         'variables': {'a': 666}
     },
-    'welcome': {
+    'welcome' : {
         'instance_id': uuid.uuid4()  # let the protocol handle this
+    },
+    'metadata': {
+        'meta': 'data',
+        'foo' : 'bar'
     }
 }
 

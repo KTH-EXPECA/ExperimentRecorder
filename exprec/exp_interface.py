@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from sqlalchemy.pool import Pool, StaticPool
 
 from .models import *
 
@@ -33,15 +34,18 @@ class VarUpdate:
 class BufferedExperimentInterface:
     def __init__(self,
                  db_address: str = 'sqlite:///:memory:',
-                 buf_size: int = 100):
+                 buf_size: int = 100,
+                 poolclass: Pool = StaticPool):
         self._engine = create_engine(db_address,
-                                     connect_args={'check_same_thread': False})
+                                     connect_args={'check_same_thread': False},
+                                     poolclass=poolclass)
         Base.metadata.create_all(self._engine)
         self._session_fact = scoped_session(sessionmaker(bind=self._engine))
 
         self._db_lock = threading.Lock()
         self._buf_size = buf_size
-        self._buf = deque()
+        self._buf = deque()  # no max size, max buf_size is only minimum size
+        # to flush automatically
 
         self._session: Session = self._session_fact()
 
@@ -148,15 +152,13 @@ class BufferedExperimentInterface:
             self._session.add_all(metadata)
             self._session.commit()
 
-    def record_variable(self,
-                        experiment_id: uuid.UUID,
-                        name: str,
-                        value: Any,
-                        timestamp: datetime.datetime) -> None:
-        self._buf.append(VarUpdate(timestamp=timestamp,
-                                   name=name,
-                                   value=value,
-                                   exp_id=experiment_id))
+    def record_variables(self,
+                         experiment_id: uuid.UUID,
+                         timestamp: datetime.datetime,
+                         **kwargs):
+        self._buf.extend([
+            VarUpdate(timestamp=timestamp, exp_id=experiment_id,
+                      name=var, value=val, ) for var, val in kwargs.items()])
 
         # flush to disk if buffered enough
         if len(self._buf) >= self._buf_size:

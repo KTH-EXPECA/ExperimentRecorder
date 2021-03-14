@@ -11,17 +11,111 @@
 # #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # #  See the License for the specific language governing permissions and
 # #  limitations under the License.
-# from __future__ import annotations
-#
-# from typing import Callable
-#
-# from twisted.internet.protocol import Factory
-# from twisted.test import proto_helpers
-# from twisted.trial import unittest
-#
-# from exprec.messages import validate_message
-# from exprec.protocol import MessagePacker, MessageProtocol, MessageUnpacker
-# from .test_message_schemas import valid_payloads
+from __future__ import annotations
+
+import datetime
+import time
+import uuid
+
+from twisted.test import proto_helpers
+from twisted.trial import unittest
+
+from exprec.exp_interface import BufferedExperimentInterface
+from exprec.messages import make_message, validate_message
+from exprec.protocol import MessagePacker, MessageProtoFactory, \
+    MessageProtocol, \
+    MessageUnpacker
+
+
+class TestMessagePacking(unittest.TestCase):
+    def setUp(self) -> None:
+        self._packer = MessagePacker()
+        self._unpacker = MessageUnpacker()
+
+    def test_pack_unpack(self):
+        message = {
+            'date': datetime.datetime.fromtimestamp(time.monotonic()),
+            'uuid': uuid.uuid4()
+        }
+
+        packed = self._packer.pack(message)
+        self.assertIsNotNone(packed)
+
+        self._unpacker.feed(packed)
+        unpacked = next(self._unpacker)
+
+        self.assertDictEqual(message, unpacked)
+
+
+class TestProtocol(unittest.TestCase):
+    def setUp(self) -> None:
+        addr = ('dummy', 0)
+        self._interface = BufferedExperimentInterface()
+        factory = MessageProtoFactory(self._interface)
+
+        self.proto: MessageProtocol = factory.buildProtocol(addr)
+        self.transport = proto_helpers.StringTransport()
+        self.proto.makeConnection(self.transport)
+
+        # use the special packers
+        self.packer = MessagePacker()
+        self.unpacker = MessageUnpacker()
+
+        # server should send two things, version and experiment instance
+        self.unpacker.feed(self.transport.value())
+        self.transport.clear()
+
+        version_msg = next(self.unpacker)
+        msg_type, msg = validate_message(version_msg)
+        self.assertEqual(msg_type, 'version')
+        self.assertEqual(msg['major'], self.proto.version_major)
+        self.assertEqual(msg['minor'], self.proto.version_minor)
+
+        welcome_msg = next(self.unpacker)
+        msg_type, msg = validate_message(welcome_msg)
+        self.assertEqual(msg_type, 'welcome')
+        self.assertIn('instance_id', msg)
+
+    def tearDown(self) -> None:
+        self._interface.close()
+
+    def test_send_metadata(self):
+        metadata_msg = make_message('metadata', {'foo': 'bar'})
+        self.proto.dataReceived(self.packer.pack(metadata_msg))
+
+        # protocol should simply reply with a success message
+        self.unpacker.feed(self.transport.value())
+        self.transport.clear()
+
+        reply = next(self.unpacker)
+        rtype, rmsg = validate_message(reply)
+        self.assertEqual(rtype, 'status')
+        self.assertTrue(rmsg['success'])
+
+    def test_send_record(self):
+        record_msg = make_message(
+            msg_type='record',
+            payload={
+                'timestamp': datetime.datetime.now(),
+                'variables': {
+                    'foo' : 666,
+                    'acab': 1312
+                }
+            }
+        )
+
+        # protocol should reply with a success message
+        self.proto.dataReceived(self.packer.pack(record_msg))
+
+        self.unpacker.feed(self.transport.value())
+        self.transport.clear()
+
+        reply = next(self.unpacker)
+        rtype, rmsg = validate_message(reply)
+        self.assertEqual(rtype, 'status')
+        self.assertTrue(rmsg['success'])
+        self.assertEqual(rmsg['info']['recorded'], 2)
+
 #
 #
 # class Counter:
