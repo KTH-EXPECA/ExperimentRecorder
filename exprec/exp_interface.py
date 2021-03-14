@@ -14,7 +14,7 @@
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Set, Tuple
 
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
@@ -53,6 +53,13 @@ class BufferedExperimentInterface:
 
         self._exc_lock = threading.Lock()
         self._exc = None
+
+        # collect all the experiment instances we make
+        self._experiment_ids: Set[uuid.UUID] = set()
+
+    @property
+    def experiment_instances(self) -> Tuple[uuid.UUID]:
+        return tuple(self._experiment_ids)
 
     @property
     def session(self) -> Session:
@@ -141,6 +148,7 @@ class BufferedExperimentInterface:
             self._session.add(experiment)
             self._session.commit()
 
+            self._experiment_ids.add(experiment.id)
             return experiment.id
 
     def add_metadata(self, experiment_id: uuid.UUID, **kwargs) -> None:
