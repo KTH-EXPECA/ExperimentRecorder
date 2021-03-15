@@ -34,8 +34,7 @@ setuptools.setup(
     version=version.__version__,
     author='KTH Royal Institute of Technology',
     author_email='molguin@kth.se',
-    description='Experiment recording library built on top of PyTables and '
-                'HDF5.',  # FIXME
+    description='',  # TODO
     long_description='',  # TODO
     long_description_content_type='text/markdown',
     url='https://github.com/KTH-EXPECA/ExperimentRecorder',
