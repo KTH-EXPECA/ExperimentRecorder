@@ -95,7 +95,7 @@ class TestCLI(unittest.TestCase):
 
         for exp_name, exp_id in self.experiments.items():
             expected_metadata = dummy_data[exp_name]['metadata']
-            mdata = metadata[exp_id]
+            mdata = metadata[str(exp_id)]
 
             for k, v in expected_metadata.items():
                 self.assertIn(k, mdata)

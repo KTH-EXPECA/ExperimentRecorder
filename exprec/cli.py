@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import json
 from pathlib import Path
 from typing import Any, Collection, Mapping, TextIO
 
@@ -19,7 +20,7 @@ import pandas as pd
 # TODO add logging
 import toml
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from twisted.internet import reactor
 from twisted.internet.endpoints import TCP4ServerEndpoint, TCP6ServerEndpoint, \
@@ -54,15 +55,16 @@ def _records_to_dataframe(db_session: Session,
 
     df = pd.DataFrame([r._asdict() for r in query])
     # session.close()
-    df = df.pivot(index=['experiment', 'timestamp'],
-                  columns='variable',
-                  values='value')
+    if not df.empty:
+        df = df.pivot(index=['experiment', 'timestamp'],
+                      columns='variable',
+                      values='value')
     return df
 
 
 def _metadata_to_json(session: Session,
                       exp_ids: Collection[uuid.UUID]) \
-        -> Mapping[uuid.UUID, Any]:
+        -> Mapping[str, Any]:
     # returns the experiment metadata in the DB as a json-compliant dict
     output = {}
     for exp_id in exp_ids:
@@ -74,14 +76,25 @@ def _metadata_to_json(session: Session,
             .filter(ExperimentInstance.id == ExperimentMetadata.instance_id) \
             .all()
 
-        output[exp_id] = {q.label: q.value for q in query}
+        output[str(exp_id)] = {q.label: q.value for q in query}
     return output
 
 
 def _aggregate_and_output(engine: Engine,
                           exp_ids: Collection[uuid.UUID],
                           output_path: Path):
-    pass
+    # first, get data as a table and metadata as a dict
+    Base.metadata.create_all(engine)
+    session_fact = sessionmaker(bind=engine)
+    session = session_fact()
+
+    data = _records_to_dataframe(session, exp_ids)
+    metadata = _metadata_to_json(session, exp_ids)
+
+    # output to files
+    with (output_path / 'metadata.json').open('w') as fp:
+        json.dump(obj=metadata, fp=fp, indent=4)
+    data.to_csv(output_path / 'data.csv', index=True)
 
 
 @click.command()
