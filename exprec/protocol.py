@@ -18,7 +18,8 @@ import uuid
 from typing import Any, Mapping, Tuple
 
 import msgpack
-from twisted.internet.protocol import Factory, Protocol
+from twisted.internet.protocol import Factory, Protocol, connectionDone
+from twisted.python import failure
 
 from .exp_interface import BufferedExperimentInterface
 # msgpack needs special code to pack/unpack datetimes and uuids
@@ -82,9 +83,11 @@ class MessageProtocol(Protocol):
         inst_msg = make_message('welcome', {'instance_id': self._experiment_id})
         self._send(inst_msg)
 
-    # multiple connections share same interface, don't close it
-    # def connectionLost(self, reason: failure.Failure = connectionDone):
-    #     self._interface.close()
+    def connectionLost(self, reason: failure.Failure = connectionDone):
+        # multiple connections share same interface, don't close it
+        # however, add a timestamp to the experiment
+        # TODO: test
+        self._interface.finish_experiment_instance(self._experiment_id)
 
     # noinspection PyArgumentList
     def _send(self, o: Any) -> None:

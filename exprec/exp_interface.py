@@ -151,6 +151,16 @@ class BufferedExperimentInterface:
             self._experiment_ids.add(experiment.id)
             return experiment.id
 
+    def finish_experiment_instance(self, exp_id: uuid.UUID):
+        # TODO: test!
+        with self._db_lock:
+            exp = self._session \
+                .query(ExperimentInstance) \
+                .filter(ExperimentInstance.id == exp_id) \
+                .first()
+            exp.end = datetime.datetime.now()
+            self._session.commit()
+
     def add_metadata(self, experiment_id: uuid.UUID, **kwargs) -> None:
         metadata = [ExperimentMetadata(instance_id=experiment_id,
                                        label=k, value=v)
