@@ -11,10 +11,11 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import queue
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Set, Tuple
+from typing import Any, Collection, Iterable, Set, Tuple
 
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
@@ -27,6 +28,113 @@ class VarUpdate:
     name: str = field(compare=False)
     value: Any = field(compare=False)
     exp_id: uuid.UUID = field(compare=False)
+
+
+class _FlushThread(threading.Thread):
+    def __init__(self,
+                 scoped_factory: scoped_session):
+        super(_FlushThread, self).__init__()
+        self._scoped_fact = scoped_factory
+        self._db_lock = threading.Lock()
+        self._buf_queue = queue.Queue()
+
+        self._shutdown = threading.Event()
+        self._shutdown.clear()
+
+        self._exc_lock = threading.Lock()
+        self._exc = None
+
+        # mapping from (exp_id, name) to variable table instance,
+        # this is for memoization. Whenever we see a pair (exp, variable
+        # name) we haven't seen before, we fetch the matching variable id
+        # from the DB and save it for efficient future reference
+        self._var_memo = {}
+
+    def push_records(self, buf: Collection[VarUpdate]):
+        if self._shutdown.is_set():
+            raise RuntimeError('Thread is shut down.')
+        else:
+            self._buf_queue.put_nowait(buf)
+
+    def db_lock(self) -> threading.Lock:
+        return self._db_lock
+
+    def flushing(self) -> bool:
+        return self._buf_queue.unfinished_tasks > 0
+
+    def wait_for_flush(self) -> None:
+        self._buf_queue.join()
+
+    def sanity_check(self) -> None:
+        with self._exc_lock:
+            if self._exc is not None:
+                raise self._exc
+
+    def join(self, timeout: Optional[float] = None) -> None:
+        self._shutdown.set()
+        self.wait_for_flush()
+        super(_FlushThread, self).join(timeout=timeout)
+
+    def _flush_to_db(self, buf: Iterable[VarUpdate]) -> None:
+        # get a new session for the flush
+        # this is scoped, so should be the same every time
+        with self._db_lock:
+            session: Session = self._scoped_fact()
+
+        records = deque()
+        for var_upd in buf:
+            try:
+                # memoization for efficiency
+                var_id = self._var_memo[(var_upd.exp_id, var_upd.name)]
+            except KeyError:
+                # memoization lookup failed
+                # need to find variable in database or create it!
+                with self._db_lock:
+                    # doing it by merge is more efficient than querying
+                    # first and creating if query fails
+                    variable = session.merge(InstanceVariable(
+                        name=var_upd.name,
+                        instance_id=var_upd.exp_id))
+                    session.commit()
+                    var_id = variable.id
+
+                # memoization for future reference:
+                self._var_memo[(var_upd.exp_id, var_upd.name)] = var_id
+
+            # collect all the new records and commit them all together
+            records.append(VariableRecord(variable_id=var_id,
+                                          timestamp=var_upd.timestamp,
+                                          value=var_upd.value))
+        # commit all the records to the database
+        with self._db_lock:
+            session.add_all(records)
+            session.commit()
+            session.close()
+
+    def run(self) -> None:
+        try:
+            self._shutdown.clear()
+            while not self._shutdown.is_set():
+                try:
+                    buf = self._buf_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+
+                self._flush_to_db(buf)
+                self._buf_queue.task_done()
+
+            # flush remaining tasks
+            while True:
+                try:
+                    buf = self._buf_queue.get_nowait()
+                    self._flush_to_db(buf)
+                    self._buf_queue.task_done()
+                except queue.Empty:
+                    break
+        except ... as e:
+            with self._exc_lock:
+                self._exc = e
+                raise e
 
 
 class BufferedExperimentInterface:
