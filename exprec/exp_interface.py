@@ -152,7 +152,6 @@ class BufferedExperimentInterface:
             return experiment.id
 
     def finish_experiment_instance(self, exp_id: uuid.UUID):
-        # TODO: test!
         with self._db_lock:
             exp = self._session \
                 .query(ExperimentInstance) \

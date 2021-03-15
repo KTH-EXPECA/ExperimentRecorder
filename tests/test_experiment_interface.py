@@ -114,3 +114,15 @@ class TestBufferedDBAccess(unittest.TestCase):
 
         self.assertIsNotNone(records)
         self.assertEqual(len(records), self._buf_size + 1)
+
+    def test_finish_experiment(self) -> None:
+        # at disconnection time, the protocol should timestamp the experiment
+        exp_id = self._interface.new_experiment_instance()
+        self._interface.finish_experiment_instance(exp_id)
+
+        exp = self._session.query(ExperimentInstance) \
+            .filter(ExperimentInstance.id == exp_id) \
+            .first()
+
+        self.assertIsNotNone(exp.end)
+        self.assertIsInstance(exp.end, datetime.datetime)

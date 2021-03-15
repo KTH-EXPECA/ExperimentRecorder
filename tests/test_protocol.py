@@ -122,7 +122,6 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(rtype, 'status')
         self.assertTrue(rmsg['success'])
         self.assertEqual(rmsg['info']['recorded'], 2)
-
 #
 #
 # class Counter:

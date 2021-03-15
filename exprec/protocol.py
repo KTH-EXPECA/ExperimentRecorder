@@ -86,7 +86,6 @@ class MessageProtocol(Protocol):
     def connectionLost(self, reason: failure.Failure = connectionDone):
         # multiple connections share same interface, don't close it
         # however, add a timestamp to the experiment
-        # TODO: test
         self._interface.finish_experiment_instance(self._experiment_id)
 
     # noinspection PyArgumentList
