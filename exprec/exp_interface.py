@@ -15,7 +15,7 @@ import queue
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Collection, Iterable, Set, Tuple
+from typing import Any, Collection, Iterable, Mapping, Set, Tuple
 
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
@@ -33,7 +33,7 @@ class VarUpdate:
 class _FlushThread(threading.Thread):
     def __init__(self,
                  scoped_factory: scoped_session,
-                 db_lock: threading.Lock):
+                 db_lock: threading.RLock):
         super(_FlushThread, self).__init__()
         self._scoped_fact = scoped_factory
         self._db_lock = db_lock
@@ -138,16 +138,15 @@ class _FlushThread(threading.Thread):
 class BufferedExperimentInterface:
     def __init__(self,
                  db_engine: Engine,
-                 buf_size: int = 100):
-        # self._engine = create_engine(db_address,
-        #                              connect_args={'check_same_thread':
-        #                              False},
-        #                              poolclass=poolclass)
+                 buf_size: int = 100,
+                 default_metadata: Mapping[str, str] = {}):
+        # TODO: document
+
         self._engine = db_engine
         Base.metadata.create_all(self._engine)
         self._session_fact = scoped_session(sessionmaker(bind=self._engine))
 
-        self._db_lock = threading.Lock()
+        self._db_lock = threading.RLock()
         self._buf_size = buf_size
         self._buf = deque()  # no max size, max buf_size is only minimum size
         # to flush automatically
@@ -165,6 +164,9 @@ class BufferedExperimentInterface:
         # shortcuts
         self.sanity_check = self._flush_t.sanity_check
         self.wait_for_flush = self._flush_t.wait_for_flush
+
+        # default metadata for all instances
+        self._def_metadata = default_metadata
 
     @property
     def experiment_instances(self) -> Tuple[uuid.UUID]:
@@ -195,8 +197,14 @@ class BufferedExperimentInterface:
             self._session.add(experiment)
             self._session.commit()
 
-            self._experiment_ids.add(experiment.id)
-            return experiment.id
+            exp_id = experiment.id
+
+            # TODO: test
+            # add the default metadata to the new instance
+            self.add_metadata(exp_id, **self._def_metadata)
+            self._experiment_ids.add(exp_id)
+
+            return exp_id
 
     def finish_experiment_instance(self, exp_id: uuid.UUID):
         with self._db_lock:

@@ -112,7 +112,12 @@ def main(config_file: TextIO) -> None:
     engine = create_engine(f'sqlite://{config["database"]["path"]}',
                            connect_args={'check_same_thread': False},
                            poolclass=StaticPool)
-    interface = BufferedExperimentInterface(db_engine=engine)
+    interface = BufferedExperimentInterface(
+        db_engine=engine,
+        default_metadata={
+            'experiment_name': config['experiment']['name'],
+            'experiment_desc': config['experiment']['description']
+        })
     protocol_fact = MessageProtoFactory(interface)
 
     # ready to listen on whatever the config says

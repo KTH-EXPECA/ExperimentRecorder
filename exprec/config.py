@@ -54,18 +54,19 @@ def _validate_new_file_path(p: str) -> Path:
 
 _CONFIG_SCHEMA = Schema(
     {
-        'experiment': {
+        'experiment'      : {
             'name'                             : str,
-            Optional('description', default=''): str
+            Optional('description', default=''): str,
+            'output_directory': Use(_validate_dir_path)
         },
         Optional('database', default={
-            'path'    : '/tmp/exp.db',
+            'path'   : '/tmp/exp.db',
             'persist': False
-        })          : {
-            'path'    : Use(Path),
+        })                : {
+            'path'   : Use(Path),
             'persist': Or(True, False, only_one=True)
         },
-        'socket'    : Or(  # either a tcp4, tcp6 or UNIX socket
+        'socket'          : Or(  # either a tcp4, tcp6 or UNIX socket
             {
                 'type'                         : 'tcp4',
                 'interface'                    : Use(
@@ -89,12 +90,6 @@ _CONFIG_SCHEMA = Schema(
             },
             only_one=True
         ),
-        'output'    : {
-            'directory'                              :
-                Use(_validate_dir_path),
-            Optional('table_filetype', default='csv'):
-                Or('csv', 'parquet', only_one=True)
-        }
     }
 )
 

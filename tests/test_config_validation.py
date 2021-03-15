@@ -21,32 +21,30 @@ from exprec.config import validate_config
 
 valid_toml_config = '''
 [experiment]
-name = "TestValid"
-description = "Valid Test Configuration"
+    name = "TestValid"
+    description = "Valid Test Configuration"
+    output_directory = "/tmp/output"
 
 [database]
-path = "/:memory:"
-persist = true
+    path = "/:memory:"
+    persist = true
 
 [socket]
-type = "tcp4"
-interface = "0.0.0.0"
-port = 1337
+    type = "tcp4"
+    interface = "0.0.0.0"
+    port = 1337
 
-[output]
-directory = "/tmp/output"
-table_filetype = "parquet"
 
 '''
 
 invalid_toml_config = '''
 [experiment]
-name = "TestInvalid"
-description = "Invalid Test Configuration"
+    name = "TestInvalid"
+    description = "Invalid Test Configuration"
 
 [output]
-directory = "/tmp/output"
-table_filetype = 3
+    directory = "/tmp/output"
+    table_filetype = 3
 
 '''
 
@@ -67,7 +65,7 @@ class TestConfigValidation(unittest.TestCase):
 
         # check paths
         self.assertIsInstance(config['database']['path'], Path)
-        self.assertIsInstance(config['output']['directory'], Path)
+        self.assertIsInstance(config['experiment']['output_directory'], Path)
 
     def test_invalid_TOML_config(self):
         config = toml.loads(invalid_toml_config)
