@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from pathlib import Path
+
 import toml
 from schema import SchemaError
 from twisted.trial import unittest
@@ -23,12 +25,13 @@ name = "TestValid"
 description = "Valid Test Configuration"
 
 [database]
-uri = "sqlite:///:memory:"
+path = "/:memory:"
 persist = true
 
 [socket]
-type = "unix"
-bind = "/tmp/exp.sock"
+type = "tcp4"
+interface = "0.0.0.0"
+port = 1337
 
 [output]
 directory = "/tmp/output"
@@ -61,6 +64,10 @@ class TestConfigValidation(unittest.TestCase):
 
         # check that default value is there for unspecified key: backlog
         self.assertIn('backlog', config['socket'])
+
+        # check paths
+        self.assertIsInstance(config['database']['path'], Path)
+        self.assertIsInstance(config['output']['directory'], Path)
 
     def test_invalid_TOML_config(self):
         config = toml.loads(invalid_toml_config)
