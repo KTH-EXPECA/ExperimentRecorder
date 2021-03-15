@@ -165,7 +165,9 @@ class BufferedExperimentInterface:
                                        label=k, value=v)
                     for k, v in kwargs.items()]
         with self._db_lock:
-            self._session.add_all(metadata)
+            for mdata in metadata:
+                # merge to update keys that may potentially already exist in db
+                self._session.merge(mdata)
             self._session.commit()
 
     def record_variables(self,
