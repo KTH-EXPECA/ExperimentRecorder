@@ -198,8 +198,6 @@ class BufferedExperimentInterface:
             self._session.commit()
 
             exp_id = experiment.id
-
-            # TODO: test
             # add the default metadata to the new instance
             self.add_metadata(exp_id, **self._def_metadata)
             self._experiment_ids.add(exp_id)

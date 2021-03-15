@@ -18,6 +18,11 @@ from twisted.trial import unittest
 from exprec.exp_interface import BufferedExperimentInterface
 from exprec.models import *
 
+default_metadata = {
+    'default_1': 'foo',
+    'default_2': 'bar'
+}
+
 
 class TestBufferedDBAccess(unittest.TestCase):
     def setUp(self) -> None:
@@ -27,8 +32,11 @@ class TestBufferedDBAccess(unittest.TestCase):
             connect_args={'check_same_thread': False},
             poolclass=StaticPool)
 
-        self._interface = BufferedExperimentInterface(buf_size=self._buf_size,
-                                                      db_engine=self._engine)
+        self._interface = BufferedExperimentInterface(
+            buf_size=self._buf_size,
+            db_engine=self._engine,
+            default_metadata=default_metadata
+        )
         self._session = self._interface.session
 
     def tearDown(self) -> None:
@@ -45,6 +53,18 @@ class TestBufferedDBAccess(unittest.TestCase):
             .first()
 
         self.assertIsNotNone(exp)
+
+        # check that default metadata was added
+        for k, v in default_metadata.items():
+            result = self._session \
+                .query(ExperimentMetadata) \
+                .filter(ExperimentMetadata.instance_id == exp_id) \
+                .filter(ExperimentMetadata.label == k) \
+                .filter(ExperimentMetadata.value == v) \
+                .first()
+
+            self.assertIsNotNone(result)
+
         return exp_id
 
     def test_add_metadata(self) -> None:
@@ -61,11 +81,17 @@ class TestBufferedDBAccess(unittest.TestCase):
             .query(ExperimentMetadata) \
             .order_by(ExperimentMetadata.label) \
             .all()
-        self.assertEqual(len(all_metadata), 2)
+        self.assertEqual(len(all_metadata), 2 + len(default_metadata))
 
-        for mdata, (k, v) in zip(all_metadata, metadata_pairs.items()):
-            self.assertEqual(mdata.label, k)
-            self.assertEqual(mdata.value, v)
+        for k, v in metadata_pairs.items():
+            result = self._session \
+                .query(ExperimentMetadata) \
+                .filter(ExperimentMetadata.instance_id == exp_id) \
+                .filter(ExperimentMetadata.label == k) \
+                .filter(ExperimentMetadata.value == v) \
+                .first()
+
+            self.assertIsNotNone(result)
 
     def test_deferred_var_record(self) -> None:
         # variable recordings should be buffered
