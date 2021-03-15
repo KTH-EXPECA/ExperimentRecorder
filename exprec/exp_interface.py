@@ -32,10 +32,11 @@ class VarUpdate:
 
 class _FlushThread(threading.Thread):
     def __init__(self,
-                 scoped_factory: scoped_session):
+                 scoped_factory: scoped_session,
+                 db_lock: threading.Lock):
         super(_FlushThread, self).__init__()
         self._scoped_fact = scoped_factory
-        self._db_lock = threading.Lock()
+        self._db_lock = db_lock
         self._buf_queue = queue.Queue()
 
         self._shutdown = threading.Event()
@@ -55,9 +56,6 @@ class _FlushThread(threading.Thread):
             raise RuntimeError('Thread is shut down.')
         else:
             self._buf_queue.put_nowait(buf)
-
-    def db_lock(self) -> threading.Lock:
-        return self._db_lock
 
     def flushing(self) -> bool:
         return self._buf_queue.unfinished_tasks > 0
@@ -156,14 +154,17 @@ class BufferedExperimentInterface:
 
         self._session: Session = self._session_fact()
 
-        self._flush_cond = threading.Condition()
-        self._flush_done = True
-
-        self._exc_lock = threading.Lock()
-        self._exc = None
-
         # collect all the experiment instances we make
         self._experiment_ids: Set[uuid.UUID] = set()
+
+        # flush in a separate thread for efficiency
+        self._flush_t = _FlushThread(scoped_factory=self._session_fact,
+                                     db_lock=self._db_lock)
+        self._flush_t.start()
+
+        # shortcuts
+        self.sanity_check = self._flush_t.sanity_check
+        self.wait_for_flush = self._flush_t.wait_for_flush
 
     @property
     def experiment_instances(self) -> Tuple[uuid.UUID]:
@@ -173,80 +174,18 @@ class BufferedExperimentInterface:
     def session(self) -> Session:
         return self._session
 
-    def sanity_check(self) -> None:
-        with self._exc_lock:
-            if self._exc is not None:
-                raise self._exc
-
-    def wait_for_flush(self) -> None:
-        with self._flush_cond:
-            if not self._flush_done:
-                self._flush_cond.wait()
-
     def flush(self, blocking: bool = False):
         # flush buffer to disk
         buf = tuple(self._buf)
         self._buf.clear()
-
-        def _flush_thread():
-            with self._flush_cond:
-                self._flush_done = False
-
-            # get a new session for the thread
-            session: Session = self._session_fact()
-
-            # mapping from (exp_id, name) to variable table instance
-            variable_map = {}
-
-            records = deque()
-            for var_upd in buf:
-                try:
-                    var_id = variable_map[(var_upd.exp_id, var_upd.name)]
-                except KeyError:
-                    # memoization lookup failed
-                    # need to find variable in database or create it!
-                    with self._db_lock:
-                        variable = session.query(InstanceVariable) \
-                            .filter_by(instance_id=var_upd.exp_id,
-                                       name=var_upd.name) \
-                            .first()
-                        if variable is None:
-                            variable = InstanceVariable(
-                                name=var_upd.name,
-                                instance_id=var_upd.exp_id)
-                            session.add(variable)
-                            session.commit()
-
-                        var_id = variable.id
-
-                    variable_map[(var_upd.exp_id, var_upd.name)] = var_id
-
-                records.append(VariableRecord(variable_id=var_id,
-                                              timestamp=var_upd.timestamp,
-                                              value=var_upd.value))
-            # commit all the records to the database
-            with self._db_lock:
-                session.add_all(records)
-                session.commit()
-                session.close()
-
-            with self._flush_cond:
-                self._flush_done = True
-                self._flush_cond.notify_all()
-
-        # fire off thread, but first wait for previous thread to finish
-        self.wait_for_flush()
-        # check for possible exceptions in previous flush
-        self.sanity_check()
-        threading.Thread(target=_flush_thread).start()
-
+        self._flush_t.push_records(buf)
         if blocking:
-            self.wait_for_flush()
-            # check for exceptions
-            self.sanity_check()
+            self._flush_t.wait_for_flush()
+            self._flush_t.sanity_check()
 
     def close(self):
         self.flush(blocking=True)
+        self._flush_t.join()
         self._session.commit()
         self._session.close()
 
