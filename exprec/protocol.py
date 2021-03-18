@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping
 
 import msgpack
+from twisted.internet.address import IPv4Address, IPv6Address, UNIXAddress
+from twisted.internet.interfaces import IAddress
 from twisted.internet.protocol import Factory, Protocol, connectionDone
 from twisted.python import failure
 
@@ -64,13 +66,33 @@ class MessageProtocol(Protocol):
     version_major = 1
     version_minor = 0
 
-    def __init__(self, interface: BufferedExperimentInterface):
+    def __init__(self,
+                 interface: BufferedExperimentInterface,
+                 addr: IAddress):
+        # TODO: document
+
         super(MessageProtocol, self).__init__()
         self._unpacker = MessageUnpacker()
         self._packer = MessagePacker()
 
         self._interface = interface
         self._experiment_id = self._interface.new_experiment_instance()
+        self._addr = addr
+
+        # immediately add the ip address to the newly created experiment
+        # instance
+        if isinstance(addr, UNIXAddress):
+            address = str(addr.name)
+        elif isinstance(addr, (IPv4Address, IPv6Address)):
+            address = f'{addr.host}:{addr.port}'
+        else:
+            # TODO: warning
+            address = ''
+
+        self._interface.add_metadata(
+            experiment_id=self._experiment_id,
+            address=address.lower()
+        )
 
     def connectionMade(self):
         # send version message and instance id
@@ -133,5 +155,5 @@ class MessageProtoFactory(Factory):
     def __init__(self, interface: BufferedExperimentInterface):
         self._interface = interface
 
-    def buildProtocol(self, addr: Tuple[str, int]) -> MessageProtocol:
-        return MessageProtocol(self._interface)
+    def buildProtocol(self, addr: IAddress) -> MessageProtocol:
+        return MessageProtocol(self._interface, addr)

@@ -13,17 +13,17 @@
 # #  limitations under the License.
 from __future__ import annotations
 
-import datetime
 import time
-import uuid
 
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
+from twisted.internet.address import IPv4Address
 from twisted.test import proto_helpers
 from twisted.trial import unittest
 
 from exprec.exp_interface import BufferedExperimentInterface
 from exprec.messages import make_message, validate_message
+from exprec.models import *
 from exprec.protocol import MessagePacker, MessageProtoFactory, \
     MessageProtocol, \
     MessageUnpacker
@@ -51,7 +51,7 @@ class TestMessagePacking(unittest.TestCase):
 
 class TestProtocol(unittest.TestCase):
     def setUp(self) -> None:
-        addr = ('dummy', 0)
+        addr = IPv4Address(type='TCP', host='localhost', port=1312)
         self._engine = create_engine(
             'sqlite:///:memory:',
             connect_args={'check_same_thread': False},
@@ -82,6 +82,17 @@ class TestProtocol(unittest.TestCase):
         msg_type, msg = validate_message(welcome_msg)
         self.assertEqual(msg_type, 'welcome')
         self.assertIn('instance_id', msg)
+
+        # a new metadata instance should exist for the experiment instance
+        session = self._interface.session
+
+        mdata = session \
+            .query(ExperimentMetadata) \
+            .filter(ExperimentMetadata.instance_id == msg['instance_id']) \
+            .first()
+
+        self.assertIsNotNone(mdata)
+        self.assertEqual(mdata.label, 'address')
 
     def tearDown(self) -> None:
         self._interface.close()
