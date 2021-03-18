@@ -11,6 +11,18 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
 import json
 from pathlib import Path
 from typing import Any, Collection, Mapping, TextIO
@@ -29,6 +41,7 @@ from twisted.internet.posixbase import PosixReactorBase
 
 from .config import validate_config
 from .exp_interface import BufferedExperimentInterface
+from .logging import LoggingThread
 from .models import *
 from .protocol import MessageProtoFactory
 
@@ -104,6 +117,11 @@ def _aggregate_and_output(engine: Engine,
               show_default=True,
               help='Configuration file.')
 def main(config_file: TextIO) -> None:
+    # start a logging thread for nice concurrent logging
+    # TODO: change loguru sink?
+    logging_thread = LoggingThread()
+    logging_thread.start()
+
     # load config
     config = toml.load(config_file)
     config = validate_config(config)
@@ -141,8 +159,6 @@ def main(config_file: TextIO) -> None:
         # should never happen
         raise RuntimeError(f'Invalid socket type {sock_cfg["type"]}.')
 
-    endpoint.listen(protocol_fact)
-
     def _shutdown():
         # on shutdown, we close the interface and write out to the CSV file
         interface.close()
@@ -154,7 +170,8 @@ def main(config_file: TextIO) -> None:
         if not config['database']['persist']:
             config['database']['path'].unlink(missing_ok=True)
 
+    endpoint.listen(protocol_fact)  # start listening
     # clean shutdown
     reactor.addSystemEventTrigger('before', 'shutdown', _shutdown)
-
+    reactor.addSystemEventTrigger('after', 'shutdown', logging_thread.join)
     reactor.run()
