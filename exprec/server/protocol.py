@@ -25,11 +25,8 @@
 #  limitations under the License.
 from __future__ import annotations
 
-import datetime
-import uuid
 from typing import Any, Mapping
 
-import msgpack
 from twisted.internet.address import IPv4Address, IPv6Address, UNIXAddress
 from twisted.internet.interfaces import IAddress
 from twisted.internet.protocol import Factory, Protocol, connectionDone
@@ -39,36 +36,7 @@ from .exp_interface import BufferedExperimentInterface
 # msgpack needs special code to pack/unpack datetimes and uuids
 from ..common.messages import InvalidMessageError, make_message, \
     validate_message
-
-
-class MessagePacker(msgpack.Packer):
-    @staticmethod
-    def encode_vartype(obj: Any) -> Mapping[str, Any]:
-        if isinstance(obj, datetime.datetime):
-            return {'__date__': obj.timestamp()}
-        elif isinstance(obj, uuid.UUID):
-            return {'__uuid__': f'{obj.int:32x}'}
-        else:
-            return obj
-
-    def __init__(self, *args, **kwargs):
-        kwargs['default'] = self.encode_vartype
-        super(MessagePacker, self).__init__(*args, **kwargs)
-
-
-class MessageUnpacker(msgpack.Unpacker):
-    @staticmethod
-    def decode_vartype(data: Any) -> Any:
-        if '__date__' in data:
-            return datetime.datetime.fromtimestamp(data['__date__'])
-        elif '__uuid__' in data:
-            return uuid.UUID(data['__uuid__'])
-        else:
-            return data
-
-    def __init__(self, *args, **kwargs):
-        kwargs['object_hook'] = self.decode_vartype
-        super(MessageUnpacker, self).__init__(*args, **kwargs)
+from ..common.packing import MessagePacker, MessageUnpacker
 
 
 # ---

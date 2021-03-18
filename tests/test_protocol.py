@@ -24,9 +24,9 @@ from twisted.trial import unittest
 from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.common.messages import make_message, validate_message
 from exprec.server.models import *
-from exprec.server.protocol import MessagePacker, MessageProtoFactory, \
-    MessageProtocol, \
-    MessageUnpacker
+from exprec.server.protocol import MessageProtoFactory, \
+    MessageProtocol
+from exprec.common.packing import MessagePacker, MessageUnpacker
 
 
 class TestMessagePacking(unittest.TestCase):
