@@ -17,7 +17,7 @@ import toml
 from schema import SchemaError
 from twisted.trial import unittest
 
-from exprec.config import validate_config
+from exprec.server.config import validate_config
 
 valid_toml_config = '''
 [experiment]

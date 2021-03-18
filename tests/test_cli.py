@@ -18,9 +18,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from twisted.trial import unittest
 
-from exprec.cli import _metadata_to_json, _records_to_dataframe
-from exprec.exp_interface import BufferedExperimentInterface
-from exprec.models import Base
+from exprec.server.cli import _metadata_to_json, _records_to_dataframe
+from exprec.server.exp_interface import BufferedExperimentInterface
+from exprec.server.models import Base
 
 dummy_data = {
     'experiment1': {

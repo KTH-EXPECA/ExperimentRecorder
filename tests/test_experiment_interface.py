@@ -15,8 +15,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from twisted.trial import unittest
 
-from exprec.exp_interface import BufferedExperimentInterface
-from exprec.models import *
+from exprec.server.exp_interface import BufferedExperimentInterface
+from exprec.server.models import *
 
 default_metadata = {
     'default_1': 'foo',

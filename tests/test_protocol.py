@@ -21,10 +21,10 @@ from twisted.internet.address import IPv4Address
 from twisted.test import proto_helpers
 from twisted.trial import unittest
 
-from exprec.exp_interface import BufferedExperimentInterface
-from exprec.messages import make_message, validate_message
-from exprec.models import *
-from exprec.protocol import MessagePacker, MessageProtoFactory, \
+from exprec.server.exp_interface import BufferedExperimentInterface
+from exprec.common.messages import make_message, validate_message
+from exprec.server.models import *
+from exprec.server.protocol import MessagePacker, MessageProtoFactory, \
     MessageProtocol, \
     MessageUnpacker
 

@@ -19,7 +19,7 @@ from typing import Callable
 
 from twisted.trial import unittest
 
-from exprec.messages import InvalidMessageError, validate_message
+from exprec.common.messages import InvalidMessageError, validate_message
 
 valid_payloads = {
     'version' : {

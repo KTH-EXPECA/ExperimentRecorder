@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.exc import FlushError
 from twisted.trial import unittest
 
-from exprec.models import *
+from exprec.server.models import *
 
 
 # noinspection PyTypeChecker
