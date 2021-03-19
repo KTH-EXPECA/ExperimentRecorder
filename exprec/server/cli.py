@@ -24,10 +24,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import json
+import sys
 from pathlib import Path
-from typing import Any, Collection, Mapping, TextIO
+from typing import Any, Collection, Mapping, TextIO, Union
 
 import click
+import loguru
 import pandas as pd
 # TODO add logging
 import toml
@@ -112,39 +114,29 @@ def _aggregate_and_output(engine: Engine,
     data.to_csv(output_path / 'data.csv', index=True)
 
 
-@click.command()
-@click.option('-c', '--config-file',
-              type=click.File(mode='r'),
-              default='./exprec_config.toml',
-              show_default=True,
-              help='Configuration file.')
-def main(config_file: TextIO) -> None:
-    # start a logging thread for nice concurrent logging
-    # TODO: change loguru sink?
-    logging_thread = LoggingThread()
-    logging_thread.start()
+def _verbose_count_to_loguru_level(verbose: int) -> int:
+    # TODO test?
+    return max(loguru.logger.level('CRITICAL').no - (verbose * 10), 0)
 
-    # logger
-    log = Logger()
 
-    # load config
-    config = toml.load(config_file)
-    config = validate_config(config)
+def _configure_loguru_sink(verbose: int) -> None:
+    # configure the loguru sink
+    loguru.logger.remove()  # remove the default one and replace it
+    loguru.logger.add(sys.stderr,
+                      level=_verbose_count_to_loguru_level(verbose),
+                      colorize=True,
+                      format='<light-green>{time}</light-green> '
+                             '<level><b>{level}</b></level> '
+                             '{message}')
 
-    # initialize engine
-    engine = create_engine(f'sqlite://{config["database"]["path"]}',
-                           connect_args={'check_same_thread': False},
-                           poolclass=StaticPool)
-    interface = BufferedExperimentInterface(
-        db_engine=engine,
-        default_metadata={
-            'experiment_name': config['experiment']['name'],
-            'experiment_desc': config['experiment']['description']
-        })
-    protocol_fact = MessageProtoFactory(interface)
 
-    # ready to listen on whatever the config says
-    sock_cfg = config['socket']
+def echo_version():
+    from .._version import __version__
+    click.echo(__version__)
+
+
+def get_endpoint_from_socket_cfg(sock_cfg: Mapping[str, Any]) \
+        -> Union[UNIXServerEndpoint, TCP4ServerEndpoint, TCP6ServerEndpoint]:
     if sock_cfg['type'] == 'unix':
         # listen on a unix socket
         endpoint = UNIXServerEndpoint(reactor=reactor,
@@ -164,6 +156,52 @@ def main(config_file: TextIO) -> None:
         # should never happen
         raise RuntimeError(f'Invalid socket type {sock_cfg["type"]}.')
 
+    return endpoint
+
+
+@click.command()
+@click.option('-c', '--config-file',
+              type=click.File(mode='r'),
+              default='./exprec_config.toml',
+              show_default=True,
+              help='Configuration file.')
+@click.option('-v', '--verbose', count=True, default=0, show_default=False,
+              help='Set the STDERR logging verbosity level.')
+@click.option('-i', '--version', is_flag=True,
+              help='Print the framework version and exit')
+def main(config_file: TextIO, verbose: int, version: bool) -> None:
+    if version:
+        echo_version()
+        return
+
+    # set up nice concurrent logging
+    _configure_loguru_sink(verbose)
+    logging_thread = LoggingThread()
+    logging_thread.start()
+    log = Logger()
+
+    # load config from the specified TOML file
+    config = validate_config(toml.load(config_file))
+
+    # everything we need to access the database:
+    engine = create_engine(f'sqlite://{config["database"]["path"]}',
+                           connect_args={'check_same_thread': False},
+                           poolclass=StaticPool)
+
+    interface = BufferedExperimentInterface(
+        db_engine=engine,
+        default_metadata={
+            # Note: the default metadata is to store the name and description
+            # of the experiment as specified in the config
+            'experiment_name': config['experiment']['name'],
+            'experiment_desc': config['experiment']['description']
+        })
+    protocol_fact = MessageProtoFactory(interface)
+
+    # ready to listen on whatever the config says
+    endpoint = get_endpoint_from_socket_cfg(config['socket'])
+
+    # next we set up some callbacks for shutdown and repeated logging.
     def _shutdown():
         # on shutdown, we close the interface and write out to the CSV file
         interface.close()
@@ -186,6 +224,8 @@ def main(config_file: TextIO) -> None:
 
     endpoint.listen(protocol_fact)  # start listening
 
+    # this LoopingCall calls the backlog logging callback every 5 seconds to
+    # get a general idea of how many chunks are in memory at any given time.
     log_backlog_loop = LoopingCall(_db_backlog_callback)
     log_backlog_loop.clock = reactor
     log_backlog_loop.start(interval=5.0)  # FIXME magic number
