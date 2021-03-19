@@ -172,7 +172,7 @@ def main(config_file: TextIO, verbose: int) -> None:
     config = validate_config(toml.load(config_file))
 
     # everything we need to access the database:
-    engine = create_engine(f'sqlite://{config["database"]["path"]}',
+    engine = create_engine(f'sqlite:///{config["database"]["path"]}',
                            connect_args={'check_same_thread': False},
                            poolclass=StaticPool)
 
@@ -195,7 +195,8 @@ def main(config_file: TextIO, verbose: int) -> None:
         interface.close()
         _aggregate_and_output(engine=engine,
                               exp_ids=interface.experiment_instances,
-                              output_path=config['output']['directory'])
+                              output_path=
+                              config['experiment']['output_directory'])
 
         # finally, delete the db file if needed
         if not config['database']['persist']:
@@ -220,5 +221,6 @@ def main(config_file: TextIO, verbose: int) -> None:
 
     # clean shutdown
     reactor.addSystemEventTrigger('before', 'shutdown', _shutdown)
-    reactor.addSystemEventTrigger('after', 'shutdown', logging_thread.join)
+    # reactor.addSystemEventTrigger('after', 'shutdown', logging_thread.join)
     reactor.run()
+    logging_thread.join()  # needs to go after the .run

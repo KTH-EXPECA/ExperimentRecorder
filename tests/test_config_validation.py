@@ -26,7 +26,7 @@ valid_toml_config = '''
     output_directory = "/tmp/output"
 
 [database]
-    path = "/:memory:"
+    path = ":memory:"
     persist = true
 
 [socket]

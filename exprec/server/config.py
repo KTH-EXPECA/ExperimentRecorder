@@ -23,7 +23,20 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
 import socket
+from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -46,27 +59,27 @@ def _validate_dir_path(d: str) -> Path:
     return path
 
 
-def _validate_new_file_path(p: str) -> Path:
-    path = Path(p)
+def _validate_new_file_path(p: str, as_string: bool = True) -> PathLike:
+    path = Path(p).resolve()
     assert not path.exists()
-    return path
+    return path if not as_string else str(path)
 
 
 _CONFIG_SCHEMA = Schema(
     {
-        'experiment'      : {
+        'experiment': {
             'name'                             : str,
             Optional('description', default=''): str,
-            'output_directory': Use(_validate_dir_path)
+            'output_directory'                 : Use(_validate_dir_path)
         },
         Optional('database', default={
-            'path'   : '/tmp/exp.db',
+            'path'   : './.exp.db',
             'persist': False
-        })                : {
+        })          : {
             'path'   : Use(Path),
             'persist': Or(True, False, only_one=True)
         },
-        'socket'          : Or(  # either a tcp4, tcp6 or UNIX socket
+        'socket'    : Or(  # either a tcp4, tcp6 or UNIX socket
             {
                 'type'                         : 'tcp4',
                 'interface'                    : Use(
