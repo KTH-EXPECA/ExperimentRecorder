@@ -15,7 +15,7 @@ import queue
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Collection, Iterable, Mapping, Set, Tuple
+from typing import Any, Collection, Mapping, Set, Tuple
 
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
@@ -60,6 +60,9 @@ class _FlushThread(threading.Thread):
     def flushing(self) -> bool:
         return self._buf_queue.unfinished_tasks > 0
 
+    def get_backlog(self) -> int:
+        return self._buf_queue.unfinished_tasks
+
     def wait_for_flush(self) -> None:
         self._buf_queue.join()
 
@@ -73,7 +76,7 @@ class _FlushThread(threading.Thread):
         self.wait_for_flush()
         super(_FlushThread, self).join(timeout=timeout)
 
-    def _flush_to_db(self, buf: Iterable[VarUpdate]) -> None:
+    def _flush_to_db(self, buf: Collection[VarUpdate]) -> None:
         # get a new session for the flush
         # this is scoped, so should be the same every time
         with self._db_lock:
@@ -129,7 +132,16 @@ class _FlushThread(threading.Thread):
                     self._buf_queue.task_done()
                 except queue.Empty:
                     break
-        except ... as e:
+        except Exception as e:
+            self._shutdown.clear()
+            try:
+                # Try to gracefully empty the queue
+                while True:
+                    self._buf_queue.get_nowait()
+                    self._buf_queue.task_done()
+            except:
+                pass
+
             with self._exc_lock:
                 self._exc = e
                 raise e
@@ -167,6 +179,12 @@ class BufferedExperimentInterface:
 
         # default metadata for all instances
         self._def_metadata = default_metadata
+
+    @property
+    def backlog(self) -> Tuple[int, int]:
+        # TODO: document
+        buf_backlog = self._flush_t.get_backlog()
+        return buf_backlog, buf_backlog * self._buf_size
 
     @property
     def experiment_instances(self) -> Tuple[uuid.UUID]:
