@@ -31,7 +31,6 @@ from typing import Any, Collection, Mapping, TextIO, Union
 import click
 import loguru
 import pandas as pd
-# TODO add logging
 import toml
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -48,10 +47,12 @@ from .exp_interface import BufferedExperimentInterface
 from .logging import LoggingThread
 from .models import *
 from .protocol import MessageProtoFactory
+from .._version import __version__
 
 reactor: PosixReactorBase = reactor
 
 
+# noinspection PyProtectedMember
 def _records_to_dataframe(db_session: Session,
                           exp_ids: Collection[uuid.UUID]) -> pd.DataFrame:
     # collects all variable records into a table
@@ -115,7 +116,6 @@ def _aggregate_and_output(engine: Engine,
 
 
 def _verbose_count_to_loguru_level(verbose: int) -> int:
-    # TODO test?
     return max(loguru.logger.level('CRITICAL').no - (verbose * 10), 0)
 
 
@@ -128,11 +128,6 @@ def _configure_loguru_sink(verbose: int) -> None:
                       format='<light-green>{time}</light-green> '
                              '<level><b>{level}</b></level> '
                              '{message}')
-
-
-def echo_version():
-    from .._version import __version__
-    click.echo(__version__)
 
 
 def get_endpoint_from_socket_cfg(sock_cfg: Mapping[str, Any]) \
@@ -159,20 +154,13 @@ def get_endpoint_from_socket_cfg(sock_cfg: Mapping[str, Any]) \
     return endpoint
 
 
-@click.command()
-@click.option('-c', '--config-file',
-              type=click.File(mode='r'),
-              default='./exprec_config.toml',
-              show_default=True,
-              help='Configuration file.')
+@click.command(context_settings={'help_option_names': ['-h', '--help']})
+@click.argument('config-file', type=click.File(mode='r'))
+@click.version_option(version=__version__, prog_name='ExpRec Server')
 @click.option('-v', '--verbose', count=True, default=0, show_default=False,
               help='Set the STDERR logging verbosity level.')
-@click.option('-i', '--version', is_flag=True,
-              help='Print the framework version and exit')
-def main(config_file: TextIO, verbose: int, version: bool) -> None:
-    if version:
-        echo_version()
-        return
+def main(config_file: TextIO, verbose: int) -> None:
+    # TODO DOC
 
     # set up nice concurrent logging
     _configure_loguru_sink(verbose)
