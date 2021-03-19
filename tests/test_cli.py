@@ -12,13 +12,16 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import datetime
+import uuid
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from twisted.trial import unittest
 
-from exprec.server.cli import _metadata_to_json, _records_to_dataframe
+from exprec.server.cli import _experiment_start_end_to_json, \
+    _metadata_to_json, \
+    _records_to_dataframe
 from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.server.models import Base
 
@@ -73,6 +76,8 @@ class TestCLI(unittest.TestCase):
                 )
                 self._expected_rows += 1
 
+            interface.finish_experiment_instance(exp_id)
+
         # flush, to make sure everything is in the database
         interface.flush()
         interface.close()
@@ -100,3 +105,14 @@ class TestCLI(unittest.TestCase):
             for k, v in expected_metadata.items():
                 self.assertIn(k, mdata)
                 self.assertEqual(mdata[k], v)
+
+    def test_timing_dict(self) -> None:
+        times = _experiment_start_end_to_json(self._session,
+                                              self.experiments.values())
+        print('Times:')
+        print(times)
+
+        for exp_id, time_dict in times.items():
+            exp_id = uuid.UUID(exp_id)
+            start = datetime.datetime.fromisoformat(time_dict['start'])
+            end = datetime.datetime.fromisoformat(time_dict['end'])

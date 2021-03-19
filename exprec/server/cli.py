@@ -98,6 +98,22 @@ def _metadata_to_json(session: Session,
     return output
 
 
+def _experiment_start_end_to_json(session: Session,
+                                  exp_ids: Collection[uuid.UUID]) \
+        -> Mapping[str, Any]:
+    # returns experiment id, start and end times as dictionary.
+    # TODO: test
+    return {
+        str(instance.id): {
+            'start': instance.start.isoformat(),
+            'end'  : (instance.end.isoformat()
+                      if instance.end is not None else None)
+        }
+        for instance in session.query(ExperimentInstance)
+            .filter(ExperimentInstance.id.in_(exp_ids))
+    }
+
+
 def _aggregate_and_output(engine: Engine,
                           exp_ids: Collection[uuid.UUID],
                           output_path: Path):
@@ -108,10 +124,15 @@ def _aggregate_and_output(engine: Engine,
 
     data = _records_to_dataframe(session, exp_ids)
     metadata = _metadata_to_json(session, exp_ids)
+    experiment_times = _experiment_start_end_to_json(session, exp_ids)
 
     # output to files
     with (output_path / 'metadata.json').open('w') as fp:
         json.dump(obj=metadata, fp=fp, indent=4)
+
+    with (output_path / 'experiment_times.json').open('w') as fp:
+        json.dump(obj=experiment_times, fp=fp, indent=4)
+
     data.to_csv(output_path / 'data.csv', index=True)
 
 
