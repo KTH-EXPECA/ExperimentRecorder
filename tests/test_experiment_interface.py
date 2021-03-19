@@ -33,7 +33,7 @@ class TestBufferedDBAccess(unittest.TestCase):
             poolclass=StaticPool)
 
         self._interface = BufferedExperimentInterface(
-            buf_size=self._buf_size,
+            chunk_size=self._buf_size,
             db_engine=self._engine,
             default_metadata=default_metadata
         )
@@ -115,7 +115,7 @@ class TestBufferedDBAccess(unittest.TestCase):
 
         # flush
         self._interface.flush(blocking=True)
-        self.assertEqual(len(self._interface._buf), 0)
+        self.assertEqual(len(self._interface._chunk), 0)
 
         # now it is in the database
         records = self._session \

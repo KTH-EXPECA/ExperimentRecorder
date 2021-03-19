@@ -54,7 +54,7 @@ class TestCLI(unittest.TestCase):
         self._session_fact = sessionmaker(bind=self._engine)
         self._session = self._session_fact()
 
-        interface = BufferedExperimentInterface(buf_size=self._buf_size,
+        interface = BufferedExperimentInterface(chunk_size=self._buf_size,
                                                 db_engine=self._engine)
 
         # fill with dummy data
