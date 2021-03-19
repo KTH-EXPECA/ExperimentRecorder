@@ -187,6 +187,10 @@ class BufferedExperimentInterface:
         return chunk_backlog, chunk_backlog * self._chunk_size
 
     @property
+    def chunk_size(self) -> int:
+        return self._chunk_size
+
+    @property
     def experiment_instances(self) -> Tuple[uuid.UUID]:
         return tuple(self._experiment_ids)
 

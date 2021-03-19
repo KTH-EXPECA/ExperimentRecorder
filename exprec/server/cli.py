@@ -38,6 +38,8 @@ from twisted.internet import reactor
 from twisted.internet.endpoints import TCP4ServerEndpoint, TCP6ServerEndpoint, \
     UNIXServerEndpoint
 from twisted.internet.posixbase import PosixReactorBase
+from twisted.internet.task import LoopingCall
+from twisted.logger import Logger
 
 from .config import validate_config
 from .exp_interface import BufferedExperimentInterface
@@ -122,6 +124,9 @@ def main(config_file: TextIO) -> None:
     logging_thread = LoggingThread()
     logging_thread.start()
 
+    # logger
+    log = Logger()
+
     # load config
     config = toml.load(config_file)
     config = validate_config(config)
@@ -170,7 +175,21 @@ def main(config_file: TextIO) -> None:
         if not config['database']['persist']:
             config['database']['path'].unlink(missing_ok=True)
 
+    def _db_backlog_callback():
+        # callback for logging the backlog on the DB thread
+        chunks, records = interface.backlog
+        log.info(
+            format='Approx. record backlog: {chunks} chunks '
+                   '(@{chunk_size} records per chunk = {records})',
+            chunks=chunks, chunk_size=interface.chunk_size, records=records
+        )
+
     endpoint.listen(protocol_fact)  # start listening
+
+    log_backlog_loop = LoopingCall(_db_backlog_callback)
+    log_backlog_loop.clock = reactor
+    log_backlog_loop.start(interval=5.0)  # FIXME magic number
+
     # clean shutdown
     reactor.addSystemEventTrigger('before', 'shutdown', _shutdown)
     reactor.addSystemEventTrigger('after', 'shutdown', logging_thread.join)
