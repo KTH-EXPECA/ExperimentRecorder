@@ -37,7 +37,7 @@ class _FlushThread(threading.Thread):
         super(_FlushThread, self).__init__()
         self._scoped_fact = scoped_factory
         self._db_lock = db_lock
-        self._buf_queue = queue.Queue()
+        self._chunk_queue = queue.Queue()
 
         self._shutdown = threading.Event()
         self._shutdown.clear()
@@ -55,16 +55,16 @@ class _FlushThread(threading.Thread):
         if self._shutdown.is_set():
             raise RuntimeError('Thread is shut down.')
         else:
-            self._buf_queue.put_nowait(buf)
+            self._chunk_queue.put_nowait(buf)
 
     def flushing(self) -> bool:
-        return self._buf_queue.unfinished_tasks > 0
+        return self._chunk_queue.unfinished_tasks > 0
 
     def get_backlog(self) -> int:
-        return self._buf_queue.unfinished_tasks
+        return self._chunk_queue.unfinished_tasks
 
     def wait_for_flush(self) -> None:
-        self._buf_queue.join()
+        self._chunk_queue.join()
 
     def sanity_check(self) -> None:
         with self._exc_lock:
@@ -76,14 +76,14 @@ class _FlushThread(threading.Thread):
         self.wait_for_flush()
         super(_FlushThread, self).join(timeout=timeout)
 
-    def _flush_to_db(self, buf: Collection[VarUpdate]) -> None:
+    def _flush_to_db(self, chunk: Collection[VarUpdate]) -> None:
         # get a new session for the flush
         # this is scoped, so should be the same every time
         with self._db_lock:
             session: Session = self._scoped_fact()
 
         records = deque()
-        for var_upd in buf:
+        for var_upd in chunk:
             try:
                 # memoization for efficiency
                 var_id = self._var_memo[(var_upd.exp_id, var_upd.name)]
@@ -117,19 +117,19 @@ class _FlushThread(threading.Thread):
             self._shutdown.clear()
             while not self._shutdown.is_set():
                 try:
-                    buf = self._buf_queue.get(timeout=0.05)
+                    buf = self._chunk_queue.get(timeout=0.05)
                 except queue.Empty:
                     continue
 
                 self._flush_to_db(buf)
-                self._buf_queue.task_done()
+                self._chunk_queue.task_done()
 
             # flush remaining tasks
             while True:
                 try:
-                    buf = self._buf_queue.get_nowait()
+                    buf = self._chunk_queue.get_nowait()
                     self._flush_to_db(buf)
-                    self._buf_queue.task_done()
+                    self._chunk_queue.task_done()
                 except queue.Empty:
                     break
         except Exception as e:
@@ -137,8 +137,8 @@ class _FlushThread(threading.Thread):
             try:
                 # Try to gracefully empty the queue
                 while True:
-                    self._buf_queue.get_nowait()
-                    self._buf_queue.task_done()
+                    self._chunk_queue.get_nowait()
+                    self._chunk_queue.task_done()
             except:
                 pass
 
@@ -150,7 +150,7 @@ class _FlushThread(threading.Thread):
 class BufferedExperimentInterface:
     def __init__(self,
                  db_engine: Engine,
-                 buf_size: int = 100,
+                 chunk_size: int = 100,
                  default_metadata: Mapping[str, str] = {}):
         # TODO: document
 
@@ -159,9 +159,9 @@ class BufferedExperimentInterface:
         self._session_fact = scoped_session(sessionmaker(bind=self._engine))
 
         self._db_lock = threading.RLock()
-        self._buf_size = buf_size
-        self._buf = deque()  # no max size, max buf_size is only minimum size
-        # to flush automatically
+        self._chunk_size = chunk_size
+        self._chunk = deque()  # no max size, max chunk_size is only minimum
+        # size to flush automatically
 
         self._session: Session = self._session_fact()
 
@@ -183,8 +183,8 @@ class BufferedExperimentInterface:
     @property
     def backlog(self) -> Tuple[int, int]:
         # TODO: document
-        buf_backlog = self._flush_t.get_backlog()
-        return buf_backlog, buf_backlog * self._buf_size
+        chunk_backlog = self._flush_t.get_backlog()
+        return chunk_backlog, chunk_backlog * self._chunk_size
 
     @property
     def experiment_instances(self) -> Tuple[uuid.UUID]:
@@ -196,9 +196,9 @@ class BufferedExperimentInterface:
 
     def flush(self, blocking: bool = False):
         # flush buffer to disk
-        buf = tuple(self._buf)
-        self._buf.clear()
-        self._flush_t.push_records(buf)
+        chunk = tuple(self._chunk)
+        self._chunk.clear()
+        self._flush_t.push_records(chunk)
         if blocking:
             self._flush_t.wait_for_flush()
             self._flush_t.sanity_check()
@@ -245,10 +245,10 @@ class BufferedExperimentInterface:
                          experiment_id: uuid.UUID,
                          timestamp: datetime.datetime,
                          **kwargs):
-        self._buf.extend([
+        self._chunk.extend([
             VarUpdate(timestamp=timestamp, exp_id=experiment_id,
                       name=var, value=val, ) for var, val in kwargs.items()])
 
         # flush to disk if buffered enough
-        if len(self._buf) >= self._buf_size:
+        if len(self._chunk) >= self._chunk_size:
             self.flush()
