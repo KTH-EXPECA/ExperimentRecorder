@@ -18,10 +18,11 @@ import numpy as np
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from twisted.internet.address import IPv4Address
+from twisted.internet.defer import Deferred
 from twisted.test.proto_helpers import StringTransport
 from twisted.trial import unittest
 
-from exprec.client.client import ExpRecClient
+from exprec.client.client import ExperimentClient
 from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.server.models import ExperimentInstance, ExperimentMetadata, \
     InstanceVariable, \
@@ -47,7 +48,17 @@ for i in range(1000):
 class TestClientServer(unittest.TestCase):
     # full integration test of the client + server
     def setUp(self) -> None:
-        self.client = ExpRecClient()
+
+        self._got_exp_id = False
+        self.experiment_id = uuid.uuid4()
+
+        def _got_experiment_cb(exp_id: uuid.UUID):
+            self._got_exp_id = True
+            self.experiment_id = exp_id
+
+        self.client = ExperimentClient(
+            exp_id_deferred=Deferred().addCallback(_got_experiment_cb)
+        )
 
         addr = IPv4Address(type='TCP', host='localhost', port=1312)
         self._engine = create_engine(
@@ -70,7 +81,7 @@ class TestClientServer(unittest.TestCase):
         self.client.dataReceived(self.transport.value())
         self.transport.clear()
 
-        self.experiment_id = self.client.get_experiment_id()
+        self.assertTrue(self._got_exp_id)
 
         # check that experiment has a start timestamp
         start_timestamp, = self.session \
@@ -106,9 +117,9 @@ class TestClientServer(unittest.TestCase):
         # send metadata through the client and make sure it's received and
         # stored correctly
 
-        self.assertEqual(self.client._waiting_for_status, 0)
+        self.assertEqual(self.client.backlog, 0)
         self.client.write_metadata(**test_metadata)
-        self.assertEqual(self.client._waiting_for_status, 1)
+        self.assertEqual(self.client.backlog, 1)
 
         # pass message to server
         data = self.transport.value()
@@ -119,7 +130,7 @@ class TestClientServer(unittest.TestCase):
         reply = self.transport.value()
         self.transport.clear()
         self.client.dataReceived(reply)
-        self.assertEqual(self.client._waiting_for_status, 0)
+        self.assertEqual(self.client.backlog, 0)
 
         # check that metadata was correctly stored in the database
         for k, v in test_metadata.items():
@@ -137,9 +148,9 @@ class TestClientServer(unittest.TestCase):
         # stored correctly
 
         for record in test_records:
-            self.assertEqual(self.client._waiting_for_status, 0)
-            self.client.record_variables(**record)
-            self.assertEqual(self.client._waiting_for_status, 1)
+            self.assertEqual(self.client.backlog, 0)
+            self.client.record_variables(datetime.datetime.now(), **record)
+            self.assertEqual(self.client.backlog, 1)
 
             # pass message to server
             data = self.transport.value()
@@ -150,7 +161,7 @@ class TestClientServer(unittest.TestCase):
             reply = self.transport.value()
             self.transport.clear()
             self.client.dataReceived(reply)
-            self.assertEqual(self.client._waiting_for_status, 0)
+            self.assertEqual(self.client.backlog, 0)
 
         # check that records were correctly stored in the database,
         # NEED TO ENSURE DATA HAS BEEN FLUSHED FIRST!

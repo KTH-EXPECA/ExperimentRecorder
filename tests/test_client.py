@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from threading import Event
+
 from twisted.test.proto_helpers import StringTransport
 from twisted.trial import unittest
 
@@ -19,109 +21,106 @@ from exprec.client.client import *
 
 class TestClient(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = ExpRecClient()
+        self._exp_id_called = False
+
+        def _exp_id_callback(exp_id: uuid.UUID):
+            self.assertIsInstance(exp_id, uuid.UUID)
+            self._exp_id_called = True
+
+        d = Deferred().addCallback(_exp_id_callback)
+        self.client = ExperimentClient(exp_id_deferred=d)
         self.packer = MessagePacker()
         self.unpacker = MessageUnpacker()
 
-        # when just initialized, all writing methods should raise
-        self.assertRaises(UninitializedExperiment,
-                          self.client.get_experiment_id)
-        self.assertRaises(UninitializedExperiment,
-                          self.client.write_metadata)
-        self.assertRaises(UninitializedExperiment,
-                          self.client.record_variables)
-
-    def test_connection_made(self) -> None:
+        # make the connection and check callbacks
         self.client.makeConnection(StringTransport())
 
-    def test_init_experiment(self) -> None:
-        self.test_connection_made()
-        expected_id = uuid.uuid4()
-
-        # send an initialization message like the protocol would
-        msg = make_message('welcome', {'instance_id': expected_id})
-        self.client.dataReceived(self.packer.pack(msg))
-
-        # should now be bound and not raise anything
-        self.assertEqual(expected_id, self.client.get_experiment_id())
-
-    def test_version(self) -> None:
-        self.test_connection_made()
-
+        # send handshake messages like the server would
         # try sending a compatible version message to the client
         # should pass silently
         msg = make_message('version', {'major': self.client.version_major,
                                        'minor': self.client.version_minor})
         self.client.dataReceived(self.packer.pack(msg))
 
-        # incompatible version makes the client disconnect forcefully and raise
-        msg = make_message('version', {'major': self.client.version_major + 1,
-                                       'minor': self.client.version_minor})
-        with self.assertRaises(IncompatibleVersionException):
-            self.client.dataReceived(self.packer.pack(msg))
+        # then, send a valid experiment id
+        self.exp_id = uuid.uuid4()
+        msg = make_message('welcome', {'instance_id': self.exp_id})
+        self.client.dataReceived(self.packer.pack(msg))
+
+        # check that the callback was invoked
+        self.assertTrue(self._exp_id_called)
 
     def test_record_variables(self) -> None:
-        # must always init first
-        self.test_init_experiment()
-
         # client should not be waiting for anything atm
-        self.assertEqual(0, self.client._waiting_for_status)
+        self.assertEqual(0, self.client.backlog)
 
         # send some variable records
         records = dict(a=1, b=3, c=1, d=2)
-        self.client.record_variables(**records)
+        timestamp = datetime.datetime.now()
+        d = self.client.record_variables(timestamp=timestamp, **records)
+
+        success_received = Event()  # simply to encapsulate a bool
+        success_received.clear()
+
+        # add a callback to the success
+        def success_callback(_):
+            success_received.set()
+
+        d.addCallback(success_callback)
 
         # we should receive on the other end as a valid record message
         self.unpacker.feed(self.client.transport.value())
         self.client.transport.clear()
 
-        msg_type, msg_payload = validate_message(next(self.unpacker))
-        self.assertEqual(msg_type, 'record')
-        self.assertIn('timestamp', msg_payload)
-        self.assertIn('variables', msg_payload)
-        self.assertDictEqual(msg_payload['variables'], records)
+        msg = validate_message(next(self.unpacker))
+        self.assertEqual(msg.mtype, 'record')
+        self.assertIn('timestamp', msg.payload)
+        self.assertIn('variables', msg.payload)
+        self.assertDictEqual(msg.payload['variables'], records)
 
         # client should now be waiting for a reply
-        self.assertEqual(1, self.client._waiting_for_status)
+        self.assertEqual(1, self.client.backlog)
 
-    def test_waiting_for_reply(self) -> None:
-        # must always init first
-        self.test_init_experiment()
+        # send a reply and verify the callback is executed
+        reply = make_message('status', {'success': True})
+        self.client.dataReceived(self.packer.pack(reply))
 
-        # make the client wait for a reply
-        orig_waiting = self.client._waiting_for_status
-        self.client._waiting_for_status += 1
-
-        # send a status reply
-        msg = make_message('status', {'success': True})
-        self.client.dataReceived(self.packer.pack(msg))
-
-        # check that waiting counter has been reduced
-        self.assertEqual(orig_waiting, self.client._waiting_for_status)
+        self.assertTrue(success_received.is_set())
+        # client should not be waiting for anything
+        self.assertEqual(0, self.client.backlog)
 
     def test_record_metadata(self) -> None:
-        # must always init first
-        self.test_init_experiment()
-
         # client should not be waiting for anything atm
-        self.assertEqual(0, self.client._waiting_for_status)
+        self.assertEqual(0, self.client.backlog)
 
         # send some metadata
         metadata = dict(name='foobar', ac='ab')
-        self.client.write_metadata(**metadata)
+        d = self.client.write_metadata(**metadata)
 
-        # we should receive on the other end as a valid record message
+        success_received = Event()  # simply to encapsulate a bool
+        success_received.clear()
+
+        # add a callback to the success
+        def success_callback(_):
+            success_received.set()
+
+        d.addCallback(success_callback)
+
+        # we should receive on the other end as a valid metadata message
         self.unpacker.feed(self.client.transport.value())
         self.client.transport.clear()
 
-        msg_type, msg_payload = validate_message(next(self.unpacker))
-        self.assertEqual(msg_type, 'metadata')
-        self.assertDictEqual(msg_payload, metadata)
+        msg = validate_message(next(self.unpacker))
+        self.assertEqual(msg.mtype, 'metadata')
+        self.assertDictEqual(msg.payload, metadata)
 
         # client should now be waiting for a reply
-        self.assertEqual(1, self.client._waiting_for_status)
+        self.assertEqual(1, self.client.backlog)
 
-    def test_double_init(self) -> None:
-        # can't initialize experiment twice
-        self.test_init_experiment()
-        self.assertRaises(ProtocolException, self.test_init_experiment)
+        # send a reply and verify the callback is executed
+        reply = make_message('status', {'success': True})
+        self.client.dataReceived(self.packer.pack(reply))
+
+        self.assertTrue(success_received.is_set())
+        # client should not be waiting for anything
+        self.assertEqual(0, self.client.backlog)

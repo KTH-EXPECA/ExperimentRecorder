@@ -41,7 +41,7 @@ class InvalidMessageError(Exception):
     pass
 
 
-class _ValidMessage(NamedTuple):
+class ValidMessage(NamedTuple):
     mtype: str
     payload: Mapping[str, Any]
 
@@ -53,7 +53,7 @@ def validate_message(msg: Mapping[str, Any]) \
         payload = msg['payload']
         payload_schema = _valid_msg_type_schemas[mtype]
 
-        return _ValidMessage(mtype, Schema(payload_schema).validate(payload))
+        return ValidMessage(mtype, Schema(payload_schema).validate(payload))
     except (KeyError, SchemaError) as e:
         raise InvalidMessageError(msg) from e
 

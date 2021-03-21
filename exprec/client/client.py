@@ -13,128 +13,156 @@
 #  limitations under the License.
 from __future__ import annotations
 
-import time
+import functools
+from collections import deque
+from typing import Callable
 
+from twisted.internet.defer import Deferred
 from twisted.internet.protocol import Protocol
+from twisted.logger import Logger
+from twisted.python.failure import Failure
 
-from ..common.messages import InvalidMessageError, make_message, \
+from ..common.messages import InvalidMessageError, ValidMessage, make_message, \
     validate_message
 from ..common.packing import *
-
-
-class ExperimentClock:
-    def __init__(self):
-        self._start_time = time.monotonic()
-
-    def time(self) -> float:
-        return time.monotonic() - self._start_time
-
-    def datetime(self) -> datetime.datetime:
-        return datetime.datetime.fromtimestamp(self.time())
-
-
-class UninitializedExperiment(Exception):
-    pass
 
 
 class ProtocolException(Exception):
     pass
 
 
+class UnexpectedMessageException(ProtocolException):
+    def __init__(self, expected_mtype: str, actual_mtype: str):
+        super(UnexpectedMessageException, self).__init__(
+            f'Expected \'{expected_mtype}\', got \'{actual_mtype}\'.'
+        )
+
+
 class IncompatibleVersionException(ProtocolException):
     pass
 
 
-class ExpRecClient(Protocol):
+def check_message_type(expected_type: str) -> Callable:
+    def _decorator(fn: Callable[[ValidMessage], Any]) -> Callable:
+        @functools.wraps(fn)
+        def _wrapper(*args):
+            # hack to deal nicely with both bound and unbound methods.
+            # the message will always be the last argument, since, if self is
+            # present, it always goes first.
+            msg = args[-1]
+            if msg.mtype != expected_type:
+                raise UnexpectedMessageException(expected_mtype=expected_type,
+                                                 actual_mtype=msg.mtype)
+            return fn(*args)
+
+        return _wrapper
+
+    return _decorator
+
+
+class ExperimentClient(Protocol):
     #: protocol version
     #: TODO: in the future, deal with version mismatch
     version_major = 1
     version_minor = 0
 
-    def __init__(self):
+    def __init__(self, exp_id_deferred: Deferred = Deferred()):
+        super(ExperimentClient, self).__init__()
+        self._logger = Logger()
+        self._waiting = deque()
         self._packer = MessagePacker()
         self._unpacker = MessageUnpacker()
-        self._waiting_for_status = 0
 
-        def uninit_experiment_id() -> uuid.UUID:
-            raise UninitializedExperiment()
+        # startup callbacks
+        @check_message_type('welcome')
+        def _welcome_callback(msg: ValidMessage) -> None:
+            exp_id = msg.payload['instance_id']
+            self._logger.info(
+                'Initialized and assigned experiment ID {exp_id}.',
+                exp_id=exp_id
+            )
+            return exp_id_deferred.callback(exp_id)
 
-        def uninit_metadata(**kwargs) -> None:
-            raise UninitializedExperiment()
+        @check_message_type('version')
+        def _version_callback(msg: ValidMessage) -> None:
+            if msg.payload['major'] > self.version_major:
+                raise IncompatibleVersionException()
 
-        def uninit_record_vars(**kwargs) -> None:
-            raise UninitializedExperiment()
+        version_d = Deferred()
+        version_d.addCallback(_version_callback)
 
-        self.get_experiment_id = uninit_experiment_id
-        self.write_metadata = uninit_metadata
-        self.record_variables = uninit_record_vars
+        welcome_d = Deferred()
+        welcome_d.addCallback(_welcome_callback)
 
-        def _handshake(msg_type: str, msg_payload: Mapping[str, Any]) -> None:
-            if msg_type == 'welcome':
-                exp_id = msg_payload['instance_id']
-                exp_clock = ExperimentClock()
+        self._waiting.extend([version_d, welcome_d])
 
-                # make new handlers
-                def _experiment_id() -> uuid.UUID:
-                    return exp_id
-
-                def _write_metadata(**kwargs) -> None:
-                    msg = make_message(
-                        msg_type='metadata',
-                        payload=kwargs
-                    )
-                    self._send(msg)
-                    self._waiting_for_status += 1
-
-                def _record_variables(**kwargs) -> None:
-                    msg = make_message(
-                        msg_type='record',
-                        payload={
-                            'timestamp': exp_clock.datetime(),
-                            'variables': kwargs
-                        }
-                    )
-                    self._send(msg)
-                    self._waiting_for_status += 1
-
-                def _handshake_handler(*args, **kwargs) -> None:
-                    # fully disable handshake handler after handshake is done
-                    raise ProtocolException()
-
-                self.get_experiment_id = _experiment_id
-                self.write_metadata = _write_metadata
-                self.record_variables = _record_variables
-                self._handshake_handler = _handshake_handler
-            else:
-                raise ProtocolException()
-
-        self._handshake_handler = _handshake
-
-    def _send(self, msg: Mapping[str, Any]):
-        data = self._packer.pack(msg)
-        self.transport.write(data)
+    @property
+    def backlog(self) -> int:
+        return len(self._waiting)
 
     def dataReceived(self, data: bytes):
-        try:
-            self._unpacker.feed(data)
-            for msg in self._unpacker:
-                try:
-                    msg_type, payload = validate_message(msg)
-                    if msg_type == 'version':
-                        if self.version_major != payload['major']:
-                            raise IncompatibleVersionException()
-                            # TODO: handle versions in the future
-                    elif msg_type == 'status':
-                        if self._waiting_for_status > 0:
-                            self._waiting_for_status -= 1
-                        else:
-                            raise ProtocolException()
-                    else:
-                        self._handshake_handler(msg_type, payload)
-                except InvalidMessageError as e:
-                    # TODO log and ignore
-                    pass
-        except:
-            # any exception causes disconnection and then reraises
-            self.transport.loseConnection()
-            raise
+        self._unpacker.feed(data)
+        for msg in self._unpacker:
+            try:
+                valid_msg = validate_message(msg)
+                handler_d = self._waiting.popleft()
+                handler_d.addErrback(self._invalid_msg_errback)
+                handler_d.addErrback(self._fallback_msg_errback)
+                handler_d.callback(valid_msg)
+            except IndexError:
+                self._logger.error(
+                    format='Received a message when not expecting one?'
+                )
+
+    def _invalid_msg_errback(self, fail: Failure):
+        fail.trap(InvalidMessageError)
+        self._logger.error(
+            format='Received an invalid message!',
+        )
+
+    def _fallback_msg_errback(self, fail: Failure):
+        self._logger.critical(
+            format='Exception in message handling callback.'
+        )
+        self.transport.loseConnection()
+        fail.trap()
+
+    @check_message_type('status')
+    def _waiting_status_callback(self, msg: ValidMessage) -> None:
+        if not msg.payload['success']:
+            cause = msg.payload.get('error', 'unknown')
+            self._logger.critical(
+                format='Received error status! Cause: {cause}',
+                cause=cause
+            )
+            raise ProtocolException(f'Error status. Cause: {cause}')
+
+        return None
+
+    def _send(self, msg: Mapping[str, Any]) -> Deferred:
+        d = Deferred()
+        d.addCallback(self._waiting_status_callback)
+        self._waiting.append(d)
+
+        data = self._packer.pack(msg)
+        self.transport.write(data)
+        return d
+
+    def write_metadata(self, **kwargs) -> Deferred:
+        msg = make_message(
+            msg_type='metadata',
+            payload=kwargs
+        )
+        return self._send(msg)
+
+    def record_variables(self,
+                         timestamp: datetime.datetime,
+                         **kwargs) -> Deferred:
+        msg = make_message(
+            msg_type='record',
+            payload={
+                'timestamp': timestamp,
+                'variables': kwargs
+            }
+        )
+        return self._send(msg)
