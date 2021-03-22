@@ -36,11 +36,16 @@ class TestClient(unittest.TestCase):
         self.client.makeConnection(StringTransport())
 
         # send handshake messages like the server would
-        # try sending a compatible version message to the client
-        # should pass silently
-        msg = make_message('version', {'major': self.client.version_major,
-                                       'minor': self.client.version_minor})
-        self.client.dataReceived(self.packer.pack(msg))
+        # first, check that version sent by client is ok
+        self.unpacker.feed(self.client.transport.value())
+        self.client.transport.clear()
+
+        msg = validate_message(next(self.unpacker))
+        self.assertEqual(msg.mtype, 'version')
+        self.assertEqual(msg.payload.get('major', -1),
+                         self.client.version_major)
+        self.assertEqual(msg.payload.get('minor', -1),
+                         self.client.version_minor)
 
         # then, send a valid experiment id
         self.exp_id = uuid.uuid4()
@@ -124,3 +129,18 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success_received.is_set())
         # client should not be waiting for anything
         self.assertEqual(0, self.client.backlog)
+
+    def test_finish(self) -> None:
+        # client should not be waiting for anything atm
+        self.assertEqual(0, self.client.backlog)
+
+        # send finish message
+        self.client.finish()
+        self.unpacker.feed(self.client.transport.value())
+        self.client.transport.clear()
+
+        msg = validate_message(next(self.unpacker))
+
+        self.assertEqual(msg.mtype, 'finish')
+        self.assertIsNone(msg.payload)
+

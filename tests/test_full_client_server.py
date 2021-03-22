@@ -19,7 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from twisted.internet.address import IPv4Address
 from twisted.internet.defer import Deferred
-from twisted.logger import eventAsText, globalLogPublisher
+from twisted.logger import Logger, eventAsText, globalLogPublisher
 from twisted.test.proto_helpers import StringTransport
 from twisted.trial import unittest
 
@@ -61,6 +61,7 @@ class TestClientServer(unittest.TestCase):
         self.experiment_id = uuid.uuid4()
 
         def _got_experiment_cb(exp_id: uuid.UUID):
+            Logger().info('Got experiment id: {exp}', exp=exp_id)
             self._got_exp_id = True
             self.experiment_id = exp_id
 
@@ -85,9 +86,15 @@ class TestClientServer(unittest.TestCase):
         self.client.makeConnection(self.transport)
         self.server.makeConnection(self.transport)
 
-        # server should've sent welcome message
-        self.client.dataReceived(self.transport.value())
+        # first thing sent is by client: version
+        data = self.transport.value()
         self.transport.clear()
+        self.server.dataReceived(data)
+
+        # server should reply with a valid experiment id
+        data = self.transport.value()
+        self.transport.clear()
+        self.client.dataReceived(data)
 
         self.assertTrue(self._got_exp_id)
 
@@ -107,9 +114,12 @@ class TestClientServer(unittest.TestCase):
         self.assertIsNone(end_timestamp)
 
     def tearDown(self) -> None:
-        self.transport.loseConnection()
-        self.client.connectionLost()
-        self.server.connectionLost()
+        # client initiates disconnect with finish message
+        self.client.finish()
+        data = self.transport.value()
+
+        self.transport.clear()
+        self.server.dataReceived(data)
 
         globalLogPublisher.removeObserver(self._obs)
 

@@ -23,7 +23,7 @@ from twisted.python.failure import Failure
 from ..common.messages import InvalidMessageError, ValidMessage, make_message, \
     validate_message
 from ..common.packing import *
-from ..common.protocol import IncompatibleVersionException, ProtocolException, \
+from ..common.protocol import ProtocolException, \
     check_message_type
 
 
@@ -40,46 +40,47 @@ class ExperimentClient(Protocol):
         self._packer = MessagePacker()
         self._unpacker = MessageUnpacker()
 
-        # startup callbacks
+        self._exp_id_d = exp_id_deferred
+
+    def connectionMade(self):
+        # as soon as connection is made, send version message
+        msg = make_message('version',
+                           {
+                               'major': self.version_major,
+                               'minor': self.version_minor
+                           })
+
         @check_message_type('welcome')
-        def _welcome_callback(msg: ValidMessage) -> None:
-            exp_id = msg.payload['instance_id']
-            self._logger.info(
-                'Initialized and assigned experiment ID {exp_id}.',
-                exp_id=exp_id
-            )
-            return exp_id_deferred.callback(exp_id)
+        def welcome_callback(msg: ValidMessage):
+            self._exp_id_d.callback(msg.payload['instance_id'])
 
-        @check_message_type('version')
-        def _version_callback(msg: ValidMessage) -> None:
-            if msg.payload['major'] > self.version_major:
-                raise IncompatibleVersionException()
+        d = Deferred()
+        d.addCallback(welcome_callback)
+        self._waiting.append(d)
 
-        version_d = Deferred()
-        version_d.addCallback(_version_callback)
-
-        welcome_d = Deferred()
-        welcome_d.addCallback(_welcome_callback)
-
-        self._waiting.extend([version_d, welcome_d])
-
-    @property
-    def backlog(self) -> int:
-        return len(self._waiting)
+        self.transport.write(self._packer.pack(msg))
 
     def dataReceived(self, data: bytes):
         self._unpacker.feed(data)
         for msg in self._unpacker:
             try:
-                valid_msg = validate_message(msg)
                 handler_d = self._waiting.popleft()
-                handler_d.addErrback(self._invalid_msg_errback)
-                handler_d.addErrback(self._fallback_msg_errback)
-                handler_d.callback(valid_msg)
+
+                base_d = Deferred()
+                base_d.addCallback(validate_message)
+                base_d.chainDeferred(handler_d)
+                base_d.addErrback(self._invalid_msg_errback)
+                base_d.addErrback(self._fallback_msg_errback)
+
+                base_d.callback(msg)
             except IndexError:
                 self._logger.error(
                     format='Received a message when not expecting one?'
                 )
+
+    @property
+    def backlog(self) -> int:
+        return len(self._waiting)
 
     def _invalid_msg_errback(self, fail: Failure):
         fail.trap(InvalidMessageError)
@@ -133,3 +134,8 @@ class ExperimentClient(Protocol):
             }
         )
         return self._send(msg)
+
+    def finish(self) -> None:
+        msg = make_message('finish', None)
+        self.transport.write(self._packer.pack(msg))
+        self.transport.loseConnection()
