@@ -28,7 +28,7 @@ from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.server.models import ExperimentInstance, ExperimentMetadata, \
     InstanceVariable, \
     VariableRecord
-from exprec.server.protocol import MessageProtoFactory, MessageProtocol
+from exprec.server.protocol import MessageProtoFactory, SingleExperimentServer
 
 test_metadata = {
     'name'       : 'test_client_and_server',
@@ -79,7 +79,7 @@ class TestClientServer(unittest.TestCase):
         self.session = self._interface.session
         factory = MessageProtoFactory(self._interface)
 
-        self.server: MessageProtocol = factory.buildProtocol(addr)
+        self.server: SingleExperimentServer = factory.buildProtocol(addr)
         self.transport = StringTransport()
 
         # connect to transport

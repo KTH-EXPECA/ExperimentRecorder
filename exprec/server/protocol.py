@@ -48,9 +48,7 @@ from ..common.packing import MessagePacker, MessageUnpacker
 from ..common.protocol import *
 
 
-# ---
-
-class MessageProtocol(Protocol):
+class SingleExperimentServer(Protocol):
     #: protocol version
     #: TODO: in the future, deal with version mismatch
     version_major = 1
@@ -61,7 +59,7 @@ class MessageProtocol(Protocol):
                  addr: IAddress):
         # TODO: document
 
-        super(MessageProtocol, self).__init__()
+        super(SingleExperimentServer, self).__init__()
         self._unpacker = MessageUnpacker()
         self._packer = MessagePacker()
         self._interface = interface
@@ -179,14 +177,6 @@ class MessageProtocol(Protocol):
             self._current_d.callback(msg)
 
 
-class MessageProtoFactory(Factory):
-    def __init__(self, interface: BufferedExperimentInterface):
-        self._interface = interface
-
-    def buildProtocol(self, addr: IAddress) -> MessageProtocol:
-        return MessageProtocol(self._interface, addr)
-
-
 class ExperimentRecordingServer(Factory):
     def __init__(self,
                  db_path: str,
@@ -208,8 +198,8 @@ class ExperimentRecordingServer(Factory):
 
         self._backlog_lc = None
 
-    def buildProtocol(self, addr: IAddress) -> MessageProtocol:
-        return MessageProtocol(self._interface, addr)
+    def buildProtocol(self, addr: IAddress) -> SingleExperimentServer:
+        return SingleExperimentServer(self._interface, addr)
 
     def startFactory(self):
         self._log.info(format='Starting.')

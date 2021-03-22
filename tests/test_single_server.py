@@ -26,8 +26,7 @@ from exprec.common.messages import make_message, validate_message
 from exprec.common.packing import MessagePacker, MessageUnpacker
 from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.server.models import *
-from exprec.server.protocol import MessageProtoFactory, \
-    MessageProtocol
+from exprec.server.protocol import SingleExperimentServer
 
 
 class TestMessagePacking(unittest.TestCase):
@@ -66,9 +65,7 @@ class TestProtocol(unittest.TestCase):
             poolclass=StaticPool)
 
         self._interface = BufferedExperimentInterface(db_engine=self._engine)
-        factory = MessageProtoFactory(self._interface)
-
-        self.proto: MessageProtocol = factory.buildProtocol(addr)
+        self.proto = SingleExperimentServer(self._interface, addr)
         self.transport = proto_helpers.StringTransport()
         self.proto.makeConnection(self.transport)
 
