@@ -40,7 +40,8 @@ valid_payloads = {
     'metadata': {
         'meta': 'data',
         'foo' : 'bar'
-    }
+    },
+    'finish': None
 }
 
 
