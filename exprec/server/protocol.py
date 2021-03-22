@@ -25,12 +25,18 @@
 #  limitations under the License.
 from __future__ import annotations
 
+import json
 import uuid
+from pathlib import Path
+from typing import Mapping
 
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from twisted.internet.address import IPv4Address, IPv6Address, UNIXAddress
 from twisted.internet.defer import Deferred
 from twisted.internet.interfaces import IAddress
 from twisted.internet.protocol import Factory, Protocol
+from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from twisted.python.failure import Failure
 
@@ -179,3 +185,72 @@ class MessageProtoFactory(Factory):
 
     def buildProtocol(self, addr: IAddress) -> MessageProtocol:
         return MessageProtocol(self._interface, addr)
+
+
+class ExperimentRecordingServer(Factory):
+    def __init__(self,
+                 db_path: str,
+                 output_dir: Path,
+                 db_persist: bool = False,
+                 default_metadata: Mapping[str, Any] = {}):
+        self._log = Logger()
+        self._engine = create_engine(
+            f'sqlite:///{db_path}',
+            connect_args={'check_same_thread': False},
+            poolclass=StaticPool)
+        self._db_path = db_path
+        self._db_persist = db_persist
+        self._interface = BufferedExperimentInterface(
+            db_engine=self._engine,
+            default_metadata=default_metadata)
+        self._out_dir = output_dir.resolve()
+        self._out_dir.mkdir(exist_ok=True, parents=True)
+
+        self._backlog_lc = None
+
+    def buildProtocol(self, addr: IAddress) -> MessageProtocol:
+        return MessageProtocol(self._interface, addr)
+
+    def startFactory(self):
+        self._log.info(format='Starting.')
+
+        def interface_backlog():
+            # callback for logging the backlog on the DB thread
+            chunks, records = self._interface.backlog
+            chunk_sz = self._interface.chunk_size
+            self._log.info(
+                format='Approx. record backlog: {chunks} chunks '
+                       '(@{chunk_size} records per chunk = {records})',
+                chunks=chunks, chunk_size=chunk_sz, records=records
+            )
+
+        self._log.debug(format='Starting DB backlog looping call.')
+        self._backlog_lc = LoopingCall(interface_backlog)
+        self._backlog_lc.start(interval=5.0)  # FIXME magic number
+
+    def stopFactory(self):
+        self._log.warn(format='Shutting down.')
+
+        if self._backlog_lc is not None:
+            self._backlog_lc.stop()
+
+        self._log.warn(format='Outputting results to {path}.',
+                       path=self._out_dir)
+        # get tables and dicts from the interface
+        records = self._interface.records_as_dataframe()
+        metadata = self._interface.metadata_as_dict()
+        times = self._interface.experiment_times_as_dict()
+
+        records.to_csv(self._out_dir / 'records.csv', index=True)
+
+        with (self._out_dir / 'metadata.json').open('w') as fp:
+            json.dump(metadata, fp, indent=4)
+
+        with (self._out_dir / 'times.json').open('w') as fp:
+            json.dump(times, fp, indent=4)
+
+        self._interface.close()
+        if not self._db_persist:
+            self._log.warn(format='Deleting database file at {path}',
+                           path=self._db_path)
+            Path(self._db_path).resolve().unlink(missing_ok=True)
