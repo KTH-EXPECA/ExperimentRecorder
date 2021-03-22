@@ -11,6 +11,10 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from collections import deque
+
+import numpy as np
+import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from twisted.trial import unittest
@@ -152,3 +156,129 @@ class TestBufferedDBAccess(unittest.TestCase):
 
         self.assertIsNotNone(exp.end)
         self.assertIsInstance(exp.end, datetime.datetime)
+
+    def test_get_records_as_dataframe(self) -> None:
+        n_records = 1000
+
+        a_df = pd.DataFrame(
+            data={'a': np.linspace(-10, 10, num=n_records)},
+            index=[datetime.datetime.fromtimestamp(i)
+                   for i in np.linspace(1, 1e9, endpoint=False,
+                                        num=n_records)]
+        )
+
+        b_df = pd.DataFrame(
+            data={'b': np.logspace(-3, 2, num=n_records // 2)},
+            index=[datetime.datetime.fromtimestamp(i)
+                   for i in np.linspace(1, 1e9, endpoint=False,
+                                        num=n_records // 2)]
+        )
+
+        data_df = a_df.join(other=b_df, how='outer', sort=True)
+
+        exp_id = self._interface.new_experiment_instance()
+        for t, (a, b) in data_df.iterrows():
+            if np.isnan(b):
+                self._interface.record_variables(
+                    experiment_id=exp_id,
+                    timestamp=t,
+                    a=a
+                )
+            else:
+                self._interface.record_variables(
+                    experiment_id=exp_id,
+                    timestamp=t,
+                    a=a, b=b
+                )
+
+        # recorded, now get it back
+        exp_df = self._interface.records_as_dataframe()
+
+        # we use allclose and astype('float') since the database returns the
+        # records as Decimal objects, messing a bit with our precision.
+        self.assertTrue(np.allclose(exp_df['a'].astype('float').to_numpy(),
+                                    data_df['a'].to_numpy()))
+
+        # need to dropna since np.nan != np.nan...
+        self.assertTrue(
+            np.allclose(exp_df['b'].dropna().astype('float').to_numpy(),
+                        data_df['b'].dropna().to_numpy())
+        )
+
+    def test_metadata_as_dict(self) -> None:
+        exp_id = self._interface.new_experiment_instance()
+
+        # the new instance should have the default metadata, now we add a
+        # couple more elements
+        metadata = {f'metadata_{i}': str(i * 2) for i in range(1000)}
+        self._interface.add_metadata(experiment_id=exp_id, **metadata)
+
+        # get the dict from the interface, should have structure
+        # {id: {metadata1: foo, metadata2: bar, ...}}
+        mdata_dict = self._interface.metadata_as_dict()
+        self.assertIn(str(exp_id), mdata_dict)
+
+        exp_metadata = mdata_dict[str(exp_id)]
+        for k, v in default_metadata.items():
+            self.assertIn(k, exp_metadata)
+            self.assertEqual(v, exp_metadata[k])
+
+        for k, v in metadata.items():
+            self.assertIn(k, exp_metadata)
+            self.assertEqual(v, exp_metadata[k])
+
+    def test_start_end_as_dict(self) -> None:
+        # init and finish a few experiments
+        has_end = deque()
+        for i in range(100):
+            exp = self._interface.new_experiment_instance()
+            self._interface.finish_experiment_instance(exp)
+            has_end.append(str(exp))
+
+        # make some without and end timestamp
+        no_end = deque()
+        for i in range(100):
+            exp = self._interface.new_experiment_instance()
+            no_end.append(str(exp))
+
+        # get the dictionary
+        start_end = self._interface.experiment_times_as_dict()
+
+        for exp in has_end:
+            # these ones should all have an end timestamp
+            self.assertIn(exp, start_end)
+            self.assertIn('start', start_end[exp])
+            self.assertIn('end', start_end[exp])
+
+            start = start_end[exp]['start']
+            end = start_end[exp]['end']
+
+            self.assertIsInstance(start, str)
+            self.assertIsInstance(end, str)
+
+            try:
+                datetime.datetime.fromisoformat(start)
+            except ValueError:
+                self.fail(f'Could not parse date from start string: {start}')
+
+            try:
+                datetime.datetime.fromisoformat(end)
+            except ValueError:
+                self.fail(f'Could not parse date from end string: {end}')
+
+        for exp in no_end:
+            # these ones should not have an end timestamp
+            self.assertIn(exp, start_end)
+            self.assertIn('start', start_end[exp])
+            self.assertIn('end', start_end[exp])
+
+            start = start_end[exp]['start']
+            end = start_end[exp]['end']
+
+            self.assertIsInstance(start, str)
+            self.assertIsNone(end)
+
+            try:
+                datetime.datetime.fromisoformat(start)
+            except ValueError:
+                self.fail(f'Could not parse date from start string: {start}')

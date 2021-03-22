@@ -17,6 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Collection, Mapping, Set, Tuple
 
+import pandas as pd
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from .models import *
@@ -212,6 +213,90 @@ class BufferedExperimentInterface:
         self._flush_t.join()
         self._session.commit()
         self._session.close()
+
+    def records_as_dataframe(self) -> pd.DataFrame:
+        """
+        Returns the records collected so far as a Pandas DataFrame.
+
+        Returns
+        -------
+        DataFrame
+            A DataFrame containing the variable records collected so far.
+        """
+
+        self.flush(blocking=True)
+        with self._db_lock:
+            query = self._session.query(
+                ExperimentInstance.id.label('experiment'),
+                InstanceVariable.name.label('variable'),
+                VariableRecord.timestamp.label('timestamp'),
+                VariableRecord.value.label('value')
+            ) \
+                .filter(ExperimentInstance.id.in_(self._experiment_ids)) \
+                .filter(InstanceVariable.instance_id == ExperimentInstance.id) \
+                .filter(VariableRecord.variable_id == InstanceVariable.id)
+
+            df = pd.DataFrame([r._asdict() for r in query])
+
+        if not df.empty:
+            df = df.pivot(index=['experiment', 'timestamp'],
+                          columns='variable',
+                          values='value').sort_index()
+        return df
+
+    def metadata_as_dict(self) -> Mapping[str, Mapping[str, Any]]:
+        """
+        Returns the metadata collected so far as a JSON-compliant dictionary;
+        i.e. a dictionary where all keys are either str, int, float, bool or
+        None. UUIDs are coerced into strings.
+
+        Returns
+        -------
+        dict
+            A dictionary where keys corresponds to experiment instance IDs
+            and values to dictionaries containing metadata.
+        """
+
+        # no need to flush since metadata is not handled in a separate thread
+        # anyway.
+        with self._db_lock:
+            output = {}
+            for exp_id in self._experiment_ids:
+                instance = self._session \
+                    .query(ExperimentInstance) \
+                    .filter(ExperimentInstance.id == exp_id) \
+                    .first()
+
+                metadata = instance.experiment_metadata
+                output[str(exp_id)] = {m.label: m.value for m in metadata}
+        return output
+
+    def experiment_times_as_dict(self) -> Mapping[str, Any]:
+        """
+        Returns the start and end timestamps for each experiment instance
+        managed by this interface as a JSON-compliant dictionary; i.e. a
+        dictionary where all keys are either str, int, float, bool or
+        None. UUIDs are coerced into strings.
+
+        Returns
+        -------
+        dict
+            A dictionary where keys correspond to experiment instance IDs and
+            values to dictionaries containing the start and end times as
+            ISO-8601 formatted timestamps.
+        """
+
+        # no need to flush here either
+        return {
+            str(instance.id): {
+                'start': instance.start.isoformat(),
+                'end'  : (instance.end.isoformat()
+                          if instance.end is not None else None)
+            }
+            for instance in self._session
+                .query(ExperimentInstance)
+                .filter(ExperimentInstance.id.in_(self._experiment_ids))
+        }
 
     def new_experiment_instance(self) -> uuid.UUID:
         experiment = ExperimentInstance()
