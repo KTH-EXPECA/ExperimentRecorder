@@ -18,15 +18,16 @@ import time
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from twisted.internet.address import IPv4Address
+from twisted.logger import eventAsText, globalLogPublisher
 from twisted.test import proto_helpers
 from twisted.trial import unittest
 
-from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.common.messages import make_message, validate_message
+from exprec.common.packing import MessagePacker, MessageUnpacker
+from exprec.server.exp_interface import BufferedExperimentInterface
 from exprec.server.models import *
 from exprec.server.protocol import MessageProtoFactory, \
     MessageProtocol
-from exprec.common.packing import MessagePacker, MessageUnpacker
 
 
 class TestMessagePacking(unittest.TestCase):
@@ -51,6 +52,13 @@ class TestMessagePacking(unittest.TestCase):
 
 class TestProtocol(unittest.TestCase):
     def setUp(self) -> None:
+        # add a logger to check what's going on
+        def log_observer(e):
+            print(eventAsText(e))
+
+        self._obs = log_observer
+        globalLogPublisher.addObserver(self._obs)
+
         addr = IPv4Address(type='TCP', host='localhost', port=1312)
         self._engine = create_engine(
             'sqlite:///:memory:',
@@ -68,15 +76,17 @@ class TestProtocol(unittest.TestCase):
         self.packer = MessagePacker()
         self.unpacker = MessageUnpacker()
 
-        # server should send two things, version and experiment instance
+        # client needs to first send a valid version
+        msg = make_message('version',
+                           {
+                               'major': self.proto.version_major,
+                               'minor': self.proto.version_minor
+                           })
+        self.proto.dataReceived(self.packer.pack(msg))
+
+        # server responds with the welcome message
         self.unpacker.feed(self.transport.value())
         self.transport.clear()
-
-        version_msg = next(self.unpacker)
-        msg_type, msg = validate_message(version_msg)
-        self.assertEqual(msg_type, 'version')
-        self.assertEqual(msg['major'], self.proto.version_major)
-        self.assertEqual(msg['minor'], self.proto.version_minor)
 
         welcome_msg = next(self.unpacker)
         msg_type, msg = validate_message(welcome_msg)
@@ -95,7 +105,12 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(mdata.label, 'address')
 
     def tearDown(self) -> None:
+        # make sure the protocol shuts down
+        msg = make_message('finish', None)
+        self.proto.dataReceived(self.packer.pack(msg))
+        self.transport.clear()
         self._interface.close()
+        globalLogPublisher.removeObserver(self._obs)
 
     def test_send_metadata(self):
         metadata_msg = make_message('metadata', {'foo': 'bar'})
@@ -133,93 +148,11 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(rtype, 'status')
         self.assertTrue(rmsg['success'])
         self.assertEqual(rmsg['info']['recorded'], 2)
-#
-#
-# class Counter:
-#     def __init__(self):
-#         self._count = 0
-#
-#     @property
-#     def count(self) -> int:
-#         return self._count
-#
-#     def inc(self) -> None:
-#         self._count += 1
-#
-#
-# class DynamicTestsMeta(type):
-#     def __init__(cls, *args, **kwargs):
-#         super(DynamicTestsMeta, cls).__init__(*args, **kwargs)
-#
-#         def make_test(msg_type: str) -> Callable:
-#             def _test(self: TestProtocol):
-#                 calls = Counter()
-#
-#                 # register a handler for the msg_type
-#                 @self.proto.handler(msg_type)
-#                 def handler(payload):
-#                     calls.inc()
-#
-#                 # send a valid message, check that call counter has been
-#                 # incremented
-#                 valid_msg = {
-#                     'type'   : msg_type,
-#                     'payload': valid_payloads[msg_type]
-#                 }
-#                 self.proto.dataReceived(self.packer.pack(valid_msg))
-#                 self.assertEqual(calls.count, 1)
-#
-#                 # check that reply is valid
-#                 self.unpacker.feed(self.transport.value())
-#                 reply = next(self.unpacker)
-#                 self.transport.clear()
-#
-#                 mt, pload = validate_message(reply)
-#                 self.assertEqual(mt, 'status')
-#                 self.assertTrue(pload['success'])
-#
-#                 # check handler is not called for invalid messages
-#                 invalid_msg = {
-#                     'type'   : 'invalid',
-#                     'payload': {}
-#                 }
-#                 self.proto.dataReceived(self.packer.pack(invalid_msg))
-#                 self.assertEqual(calls.count, 1)
-#
-#                 # check that protocol sends an error reply
-#                 self.unpacker.feed(self.transport.value())
-#                 err_reply = next(self.unpacker)
-#                 self.transport.clear()
-#
-#                 mt, pload = validate_message(err_reply)
-#                 self.assertEqual(mt, 'status')
-#                 self.assertFalse(pload['success'])
-#
-#             return _test
-#
-#         for msg_type in valid_payloads.keys():
-#             setattr(cls, f'test_{msg_type}', make_test(msg_type))
-#
-#
-# class TestProtocol(unittest.TestCase, metaclass=DynamicTestsMeta):
-#     def setUp(self) -> None:
-#         addr = ('0.0.0.0', 0)
-#         factory = Factory.forProtocol(MessageProtocol)
-#         self.proto: MessageProtocol = factory.buildProtocol(addr)
-#         self.transport = proto_helpers.StringTransport()
-#         self.proto.makeConnection(self.transport)
-#
-#         # use the special packers
-#         self.packer = MessagePacker()
-#         self.unpacker = MessageUnpacker()
-#
-#         # first thing server should send is version
-#         self.unpacker.feed(self.transport.value())
-#         version_msg = next(self.unpacker)
-#
-#         msg_type, msg = validate_message(version_msg)
-#         self.assertEqual(msg_type, 'version')
-#         self.assertEqual(msg['major'], self.proto.version_major)
-#         self.assertEqual(msg['minor'], self.proto.version_minor)
-#
-#         self.transport.clear()
+
+    def test_repeat_send_record(self):
+        for _ in range(10):
+            self.test_send_record()
+
+    def test_repeat_send_metadata(self):
+        for _ in range(10):
+            self.test_send_metadata()

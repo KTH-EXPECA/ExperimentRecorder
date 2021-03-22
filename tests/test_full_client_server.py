@@ -19,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from twisted.internet.address import IPv4Address
 from twisted.internet.defer import Deferred
+from twisted.logger import eventAsText, globalLogPublisher
 from twisted.test.proto_helpers import StringTransport
 from twisted.trial import unittest
 
@@ -46,8 +47,15 @@ for i in range(1000):
 
 # noinspection DuplicatedCode
 class TestClientServer(unittest.TestCase):
-    # full integration test of the client + server
+    # test client + server, without extra code though
     def setUp(self) -> None:
+
+        # add a logger to check what's going on
+        def log_observer(e):
+            print(eventAsText(e))
+
+        self._obs = log_observer
+        globalLogPublisher.addObserver(self._obs)
 
         self._got_exp_id = False
         self.experiment_id = uuid.uuid4()
@@ -102,6 +110,8 @@ class TestClientServer(unittest.TestCase):
         self.transport.loseConnection()
         self.client.connectionLost()
         self.server.connectionLost()
+
+        globalLogPublisher.removeObserver(self._obs)
 
         # check that experiment has an end timestamp now
         end_timestamp, = self.session \

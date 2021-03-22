@@ -33,7 +33,8 @@ _valid_msg_type_schemas = {
     'welcome' : {
         'instance_id': uuid.UUID  # let the protocol handle this
     },
-    'metadata': {Optional(str): str}
+    'metadata': {Optional(str): str},
+    'finish'  : None
 }
 
 
@@ -59,7 +60,7 @@ def validate_message(msg: Mapping[str, Any]) \
 
 
 def make_message(msg_type: str,
-                 payload: Mapping[str, Any]) -> Mapping[str, Any]:
+                 payload: Any) -> Mapping[str, Any]:
     mtype, payload = validate_message({'type': msg_type, 'payload': payload})
     return {
         'type'   : mtype,

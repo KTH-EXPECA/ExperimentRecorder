@@ -13,9 +13,7 @@
 #  limitations under the License.
 from __future__ import annotations
 
-import functools
 from collections import deque
-from typing import Callable
 
 from twisted.internet.defer import Deferred
 from twisted.internet.protocol import Protocol
@@ -25,39 +23,8 @@ from twisted.python.failure import Failure
 from ..common.messages import InvalidMessageError, ValidMessage, make_message, \
     validate_message
 from ..common.packing import *
-
-
-class ProtocolException(Exception):
-    pass
-
-
-class UnexpectedMessageException(ProtocolException):
-    def __init__(self, expected_mtype: str, actual_mtype: str):
-        super(UnexpectedMessageException, self).__init__(
-            f'Expected \'{expected_mtype}\', got \'{actual_mtype}\'.'
-        )
-
-
-class IncompatibleVersionException(ProtocolException):
-    pass
-
-
-def check_message_type(expected_type: str) -> Callable:
-    def _decorator(fn: Callable[[ValidMessage], Any]) -> Callable:
-        @functools.wraps(fn)
-        def _wrapper(*args):
-            # hack to deal nicely with both bound and unbound methods.
-            # the message will always be the last argument, since, if self is
-            # present, it always goes first.
-            msg = args[-1]
-            if msg.mtype != expected_type:
-                raise UnexpectedMessageException(expected_mtype=expected_type,
-                                                 actual_mtype=msg.mtype)
-            return fn(*args)
-
-        return _wrapper
-
-    return _decorator
+from ..common.protocol import IncompatibleVersionException, ProtocolException, \
+    check_message_type
 
 
 class ExperimentClient(Protocol):
