@@ -15,6 +15,7 @@ from pathlib import Path
 
 import toml
 from schema import SchemaError
+from sqlalchemy.engine import Engine
 from twisted.trial import unittest
 
 from exprec.server.config import validate_config
@@ -23,51 +24,59 @@ valid_toml_config = '''
 [experiment]
     name = "TestValid"
     description = "Valid Test Configuration"
-    output_directory = "/tmp/output"
-
-[database]
-    path = ":memory:"
-    persist = true
-
-[socket]
-    type = "tcp4"
-    interface = "0.0.0.0"
-    port = 1337
-
-
-'''
-
-invalid_toml_config = '''
-[experiment]
-    name = "TestInvalid"
-    description = "Invalid Test Configuration"
+    
+[experiment.default_metadata]
+    potatoes = "boil 'em, mash 'em, stick 'em in a stew"
 
 [output]
-    directory = "/tmp/output"
-    table_filetype = 3
+    directory = "/tmp/exprec"
+    record_file = "test_records.csv"
+    metadata_file = "test_metadata.json"
+    times_file = "test_times.json"
+    
+[database]
+    engine = "sqlite:///:memory:"
+    persist = true
+    record_chunksize = 128
 
+[server]
+    endpoint = "tcp6:1312:interface=0.0.0.0"
+    
 '''
 
 
 class TestConfigValidation(unittest.TestCase):
-    def setUp(self) -> None:
-        pass
-
-    def tearDown(self) -> None:
-        pass
-
     def test_valid_TOML_config(self):
         config = toml.loads(valid_toml_config)
         config = validate_config(config)
 
-        # check that default value is there for unspecified key: backlog
-        self.assertIn('backlog', config['socket'])
+        # check keys that should have been converted
+        self.assertIn('output', config)
+        self.assertIn('directory', config['output'])
+        self.assertIsInstance(config['output']['directory'], Path)
 
-        # check paths
-        self.assertIsInstance(config['database']['path'], Path)
-        self.assertIsInstance(config['experiment']['output_directory'], Path)
+        self.assertIn('database', config)
+        self.assertIn('engine', config['database'])
+        self.assertIsInstance(config['database']['engine'], Engine)
 
-    def test_invalid_TOML_config(self):
-        config = toml.loads(invalid_toml_config)
+        self.assertIn('server', config)
+        self.assertIn('endpoint', config['server'])
+        self.assertTrue(hasattr(config['server']['endpoint'], 'listen'))
+
+    def test_invalid_output_dir(self):
+        config = toml.loads(valid_toml_config)
+        config['output']['directory'] = '/bin/bash'
+        with self.assertRaises(SchemaError):
+            validate_config(config)
+
+    def test_invalid_db_engine(self):
+        config = toml.loads(valid_toml_config)
+        config['database']['engine'] = 'tcp:8000'
+        with self.assertRaises(SchemaError):
+            validate_config(config)
+
+    def test_invalid_server_endpoint(self):
+        config = toml.loads(valid_toml_config)
+        config['server']['endpoint'] = '/home/molguin'
         with self.assertRaises(SchemaError):
             validate_config(config)
