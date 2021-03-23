@@ -30,8 +30,7 @@ import uuid
 from pathlib import Path
 from typing import Mapping
 
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.engine import Engine
 from twisted.internet.address import IPv4Address, IPv6Address, UNIXAddress
 from twisted.internet.defer import Deferred
 from twisted.internet.interfaces import IAddress
@@ -180,22 +179,20 @@ class SingleExperimentServer(Protocol):
 
 class ExperimentRecordingServer(Factory):
     def __init__(self,
-                 db_path: str,
+                 db_engine: Engine,
                  output_dir: Path,
+                 record_chunk_size: int = 100,
                  records_filename: str = 'records.csv',
                  metadata_filename: str = 'metadata.json',
                  times_filename: str = 'times.json',
-                 db_persist: bool = False,
                  default_metadata: Mapping[str, Any] = {}):
+        # TODO: document
         self._log = Logger()
-        self._engine = create_engine(
-            f'sqlite:///{db_path}',
-            connect_args={'check_same_thread': False},
-            poolclass=StaticPool)
-        self._db_path = db_path
-        self._db_persist = db_persist
+
+        self._engine = db_engine
         self._interface = BufferedExperimentInterface(
             db_engine=self._engine,
+            chunk_size=record_chunk_size,
             default_metadata=default_metadata)
 
         self._out_dir = output_dir.resolve()
@@ -272,7 +269,3 @@ class ExperimentRecordingServer(Factory):
             json.dump(times, fp, indent=4)
 
         self._interface.close()
-        if not self._db_persist:
-            self._log.warn(format='Deleting database file at {path}',
-                           path=self._db_path)
-            Path(self._db_path).resolve().unlink(missing_ok=True)

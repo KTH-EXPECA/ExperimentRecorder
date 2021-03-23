@@ -32,6 +32,7 @@ from twisted.logger import Logger, eventAsText, globalLogPublisher
 from twisted.trial import unittest
 
 from exprec.client.client import ExperimentClient
+from exprec.server.config import validate_db_engine
 from exprec.server.protocol import ExperimentRecordingServer
 
 reactor: PosixReactorBase = reactor
@@ -76,8 +77,7 @@ class TestClientServer(unittest.TestCase):
 
         # set up the server, listening on a UNIX socket
         self._server = ExperimentRecordingServer(
-            db_path=':memory:',
-            db_persist=True,
+            db_engine=validate_db_engine('sqlite:///:memory:'),
             output_dir=self._out_path,
             default_metadata=default_metadata
         )

@@ -76,7 +76,6 @@ _CONFIG_SCHEMA = Schema(
         },
         'database'  : {
             'engine'              : Use(validate_db_engine),
-            'persist'             : bool,
             Optional('record_chunksize',
                      default=1000): int
         },

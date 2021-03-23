@@ -36,7 +36,6 @@ valid_toml_config = '''
     
 [database]
     engine = "sqlite:///:memory:"
-    persist = true
     record_chunksize = 128
 
 [server]
