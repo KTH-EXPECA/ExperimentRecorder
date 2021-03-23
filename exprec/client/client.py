@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections import deque
 
 from twisted.internet.defer import Deferred
-from twisted.internet.protocol import Protocol
+from twisted.internet.protocol import Protocol, connectionDone
 from twisted.logger import Logger
 from twisted.python.failure import Failure
 
@@ -33,14 +33,27 @@ class ExperimentClient(Protocol):
     version_major = 1
     version_minor = 0
 
-    def __init__(self, exp_id_deferred: Deferred = Deferred()):
+    def __init__(self):
         super(ExperimentClient, self).__init__()
         self._logger = Logger()
         self._waiting = deque()
         self._packer = MessagePacker()
         self._unpacker = MessageUnpacker()
 
-        self._exp_id_d = exp_id_deferred
+        def shutdown(r: Failure):
+            self._logger.error('Client unexpectedly disconnected!')
+            r.trap()
+
+        self._shutdown_d = Deferred()
+        self._shutdown_d.addBoth(shutdown)
+
+    def got_experiment_id(self, experiment_id: uuid.UUID):
+        """
+        Called when the client receives an experiment id from the server.
+        By default simply logs it.
+        """
+        self._logger.info(format='Assigned experiment ID {exp_id}.',
+                          exp_id=experiment_id)
 
     def connectionMade(self):
         # as soon as connection is made, send version message
@@ -52,7 +65,7 @@ class ExperimentClient(Protocol):
 
         @check_message_type('welcome')
         def welcome_callback(msg: ValidMessage):
-            self._exp_id_d.callback(msg.payload['instance_id'])
+            self.got_experiment_id(msg.payload['instance_id'])
 
         d = Deferred()
         d.addCallback(welcome_callback)
@@ -135,7 +148,25 @@ class ExperimentClient(Protocol):
         )
         return self._send(msg)
 
-    def finish(self) -> None:
+    def connectionLost(self, reason: Failure = connectionDone):
+        self._shutdown_d.callback(reason)
+
+    def finish(self) -> Deferred:
+        """
+        Returns
+        -------
+        Deferred
+            A Deferred which fires once the connection as been fully severed.
+        """
+
+        def conn_shutdown(_):
+            self._logger.info('Client successfully disconnected.')
+
+        self._logger.info('Client initiating disconnection.')
+        self._shutdown_d = Deferred()
+        self._shutdown_d.addBoth(conn_shutdown)
+
         msg = make_message('finish', None)
         self.transport.write(self._packer.pack(msg))
-        self.transport.loseConnection()
+
+        return self._shutdown_d

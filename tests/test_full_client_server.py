@@ -12,193 +12,251 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import datetime
+import json
+import os
 import uuid
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Collection, Dict, Mapping
 
 import numpy as np
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
-from twisted.internet.address import IPv4Address
+import pandas as pd
+from twisted.internet import reactor
 from twisted.internet.defer import Deferred
+from twisted.internet.endpoints import clientFromString, serverFromString
+from twisted.internet.interfaces import IListeningPort
+from twisted.internet.posixbase import PosixReactorBase
+from twisted.internet.protocol import Factory
 from twisted.logger import Logger, eventAsText, globalLogPublisher
-from twisted.test.proto_helpers import StringTransport
 from twisted.trial import unittest
 
 from exprec.client.client import ExperimentClient
-from exprec.server.exp_interface import BufferedExperimentInterface
-from exprec.server.models import ExperimentInstance, ExperimentMetadata, \
-    InstanceVariable, \
-    VariableRecord
-from exprec.server.protocol import MessageProtoFactory, SingleExperimentServer
+from exprec.server.protocol import ExperimentRecordingServer
 
-test_metadata = {
-    'name'       : 'test_client_and_server',
-    'foo'        : 'bar',
-    'lorem_ipsum': 'dolor_sit_amet'
+reactor: PosixReactorBase = reactor
+
+default_metadata = {
+    'name'       : 'test_experiment',
+    'description': 'Test experiment, full integration.'
 }
 
-var_names = [f'var_{uuid.uuid4().int:032x}' for i in range(30)]
-test_records = []
-for i in range(1000):
-    record = {
-        k: v for k, v in zip(var_names, np.random.uniform(size=len(var_names)))
-    }
-    test_records.append(record)
+socket_conn = 'unix:/tmp/exprec.sock'
+
+
+@dataclass(frozen=True)
+class VarRecord:
+    timestamp: datetime.datetime
+    variables: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ExperimentTestData:
+    records: Collection[VarRecord]
+    metadata: Mapping[str, str]
+    default_metadata: Mapping[str, str] \
+        = field(init=False, default_factory=lambda: default_metadata)
 
 
 # noinspection DuplicatedCode
 class TestClientServer(unittest.TestCase):
-    # test client + server, without extra code though
+    # full interaction test
     def setUp(self) -> None:
-
         # add a logger to check what's going on
         def log_observer(e):
             print(eventAsText(e))
 
         self._obs = log_observer
         globalLogPublisher.addObserver(self._obs)
+        self._log = Logger()
 
-        self._got_exp_id = False
-        self.experiment_id = uuid.uuid4()
+        self._out_path = Path('/tmp/exprec_test')
 
-        def _got_experiment_cb(exp_id: uuid.UUID):
-            Logger().info('Got experiment id: {exp}', exp=exp_id)
-            self._got_exp_id = True
-            self.experiment_id = exp_id
+        self._experiments: Dict[uuid.UUID, ExperimentTestData] = dict()
 
-        self.client = ExperimentClient(
-            exp_id_deferred=Deferred().addCallback(_got_experiment_cb)
+        # set up the server, listening on a UNIX socket
+        self._server = ExperimentRecordingServer(
+            db_path=':memory:',
+            db_persist=True,
+            output_dir=self._out_path,
+            default_metadata=default_metadata
         )
 
-        addr = IPv4Address(type='TCP', host='localhost', port=1312)
-        self._engine = create_engine(
-            'sqlite:///:memory:',
-            connect_args={'check_same_thread': False},
-            poolclass=StaticPool)
+        self._endpoint = serverFromString(reactor, socket_conn)
 
-        self._interface = BufferedExperimentInterface(db_engine=self._engine)
-        self.session = self._interface.session
-        factory = MessageProtoFactory(self._interface)
+        def listening(port: IListeningPort):
+            self._log.info('Server listening and ready.')
+            self._port = port
 
-        self.server: SingleExperimentServer = factory.buildProtocol(addr)
-        self.transport = StringTransport()
-
-        # connect to transport
-        self.client.makeConnection(self.transport)
-        self.server.makeConnection(self.transport)
-
-        # first thing sent is by client: version
-        data = self.transport.value()
-        self.transport.clear()
-        self.server.dataReceived(data)
-
-        # server should reply with a valid experiment id
-        data = self.transport.value()
-        self.transport.clear()
-        self.client.dataReceived(data)
-
-        self.assertTrue(self._got_exp_id)
-
-        # check that experiment has a start timestamp
-        start_timestamp, = self.session \
-            .query(ExperimentInstance.start) \
-            .filter(ExperimentInstance.id == self.experiment_id) \
-            .first()
-        self.assertIsNotNone(start_timestamp)
-        self.assertIsInstance(start_timestamp, datetime.datetime)
-
-        # check that experiment doesn't have an end timestamp yet
-        end_timestamp, = self.session \
-            .query(ExperimentInstance.end) \
-            .filter(ExperimentInstance.id == self.experiment_id) \
-            .first()
-        self.assertIsNone(end_timestamp)
+        return self._endpoint.listen(self._server).addCallback(listening)
 
     def tearDown(self) -> None:
-        # client initiates disconnect with finish message
-        self.client.finish()
-        data = self.transport.value()
+        def after_server_shutdown(_):
+            # remove the observer!!
+            globalLogPublisher.removeObserver(self._obs)
 
-        self.transport.clear()
-        self.server.dataReceived(data)
+            files_in_output = os.listdir(self._out_path)
 
-        globalLogPublisher.removeObserver(self._obs)
+            self.assertIn(self._server.records_path.name, files_in_output)
+            self.assertIn(self._server.metadata_path.name, files_in_output)
+            self.assertIn(self._server.times_path.name, files_in_output)
 
-        # check that experiment has an end timestamp now
-        end_timestamp, = self.session \
-            .query(ExperimentInstance.end) \
-            .filter(ExperimentInstance.id == self.experiment_id) \
-            .first()
-        self.assertIsNotNone(end_timestamp)
-        self.assertIsInstance(end_timestamp, datetime.datetime)
+            records = pd.read_csv(self._server.records_path)
+            if not records.empty:
+                records['timestamp'] = pd.to_datetime(records['timestamp'])
+                records['experiment'] = records['experiment'].map(uuid.UUID)
 
-        self._interface.close()
+            with self._server.metadata_path.open('r') as fp:
+                metadata = json.load(fp)
+
+            with self._server.times_path.open('r') as fp:
+                times = json.load(fp)
+
+            for exp_id, test_data in self._experiments.items():
+                for var_rec in test_data.records:
+                    for k, v in var_rec.variables.items():
+                        rec_val = records[
+                            (records['timestamp'] == var_rec.timestamp) &
+                            (records['experiment'] == exp_id)
+                            ][k]
+                        # isclose to deal with float precision
+                        self.assertTrue(np.isclose(rec_val, v))
+
+                # check the stored metadata
+                exp_id = str(exp_id)
+                for k, v in test_data.default_metadata.items():
+                    self.assertIn(exp_id, metadata)
+                    self.assertIn(k, metadata[exp_id])
+                    self.assertEqual(metadata[exp_id][k], v)
+
+                for k, v in test_data.metadata.items():
+                    self.assertIn(exp_id, metadata)
+                    self.assertIn(k, metadata[exp_id])
+                    self.assertEqual(metadata[exp_id][k], v)
+
+                # check the stored times
+                # all experiments in these runs should have both start and
+                # end times
+                self.assertIn(exp_id, times)
+                self.assertIn('start', times[exp_id])
+                self.assertIn('end', times[exp_id])
+
+                try:
+                    datetime.datetime.fromisoformat(times[exp_id]['start'])
+                except ValueError:
+                    self.fail(f'Could not parse start time from '
+                              f'{times[exp_id]}.')
+
+                try:
+                    datetime.datetime.fromisoformat(times[exp_id]['end'])
+                except ValueError:
+                    self.fail(f'Could not parse end time from '
+                              f'{times[exp_id]}.')
+
+        return self._port.stopListening().addCallback(after_server_shutdown)
+
+    def test_client_connect_disconnect(self):
+        # simple client connection + disconnection test. no additional data
+        # is sent
+
+        wait_d = Deferred()
+
+        class TestClient(ExperimentClient):
+            testcase = self
+
+            def got_experiment_id(self, experiment_id: uuid.UUID):
+                super(TestClient, self).got_experiment_id(experiment_id)
+                self.testcase._experiments[experiment_id] = ExperimentTestData(
+                    records=[], metadata={}
+                )
+                wait_d.callback(self)
+
+        def disconnect(client: TestClient):
+            return client.finish()
+
+        wait_d.addCallback(disconnect)
+
+        endpoint = clientFromString(reactor, socket_conn)
+        endpoint \
+            .connect(Factory.forProtocol(TestClient)) \
+            .addCallback(lambda _: self._log.info('Client connected.'))
+
+        return wait_d
 
     def test_send_metadata(self):
-        # send metadata through the client and make sure it's received and
-        # stored correctly
+        # simple client connection + send metadata + disconnection test.
+        metadata_to_send = {'test': 'metadata', 'foo': 'bar'}
 
-        self.assertEqual(self.client.backlog, 0)
-        self.client.write_metadata(**test_metadata)
-        self.assertEqual(self.client.backlog, 1)
+        wait_d = Deferred()
 
-        # pass message to server
-        data = self.transport.value()
-        self.transport.clear()
-        self.server.dataReceived(data)
+        class TestClient(ExperimentClient):
+            testcase = self
 
-        # pass reply to client
-        reply = self.transport.value()
-        self.transport.clear()
-        self.client.dataReceived(reply)
-        self.assertEqual(self.client.backlog, 0)
+            def got_experiment_id(self, experiment_id: uuid.UUID):
+                super(TestClient, self).got_experiment_id(experiment_id)
+                self.testcase._experiments[experiment_id] = ExperimentTestData(
+                    records=[], metadata=metadata_to_send
+                )
+                wait_d.callback(self)
 
-        # check that metadata was correctly stored in the database
-        for k, v in test_metadata.items():
-            db_metadata = self.session \
-                .query(ExperimentMetadata) \
-                .filter(ExperimentMetadata.instance_id == self.experiment_id) \
-                .filter(ExperimentMetadata.label == k) \
-                .first()
+        def ready(client: TestClient):
+            # send metadata and wait for ack before disconnecting
+            self._log.info('Client sending metadata.')
+            return client \
+                .write_metadata(**metadata_to_send) \
+                .addCallback(lambda _: client.finish())
 
-            self.assertIsNotNone(db_metadata)
-            self.assertEqual(db_metadata.value, v)
+        endpoint = clientFromString(reactor, socket_conn)
+        endpoint.connect(Factory.forProtocol(TestClient)) \
+            .addCallback(lambda _: self._log.info('Client connected.'))
+
+        wait_d.addCallback(ready)
+        return wait_d
 
     def test_send_records(self):
-        # send records through the client and make sure they're received and
-        # stored correctly
+        # client connection + send records + disconnection test.
+        records = deque([
+            VarRecord(
+                timestamp=datetime.datetime.fromtimestamp(i),
+                variables={
+                    'a': np.random.uniform(),
+                    'b': np.random.normal(),
+                    'c': np.random.randint(0, 1000)
+                })
+            for i in np.logspace(1, 9, num=10000)
+        ])
 
-        for record in test_records:
-            self.assertEqual(self.client.backlog, 0)
-            self.client.record_variables(datetime.datetime.now(), **record)
-            self.assertEqual(self.client.backlog, 1)
+        wait_d = Deferred()
 
-            # pass message to server
-            data = self.transport.value()
-            self.transport.clear()
-            self.server.dataReceived(data)
+        class TestClient(ExperimentClient):
+            testcase = self
 
-            # pass reply to client
-            reply = self.transport.value()
-            self.transport.clear()
-            self.client.dataReceived(reply)
-            self.assertEqual(self.client.backlog, 0)
+            def got_experiment_id(self, experiment_id: uuid.UUID):
+                super(TestClient, self).got_experiment_id(experiment_id)
+                self.testcase._experiments[experiment_id] = ExperimentTestData(
+                    records=records, metadata={}
+                )
+                wait_d.callback(self)
 
-        # check that records were correctly stored in the database,
-        # NEED TO ENSURE DATA HAS BEEN FLUSHED FIRST!
-        self._interface.flush(blocking=True)
-        for var in var_names:
-            db_variables = self.session \
-                .query(InstanceVariable) \
-                .filter(InstanceVariable.instance_id == self.experiment_id) \
-                .filter(InstanceVariable.name == var) \
-                .all()
+        def ready(client: TestClient):
+            # send metadata and wait for ack before disconnecting
+            self._log.info('Client sending records.')
 
-            self.assertEqual(len(db_variables), 1)
-            db_variable = db_variables[0]
+            def send(_):
+                try:
+                    rec_to_send = records.pop()
+                    return client.record_variables(
+                        timestamp=rec_to_send.timestamp,
+                        **rec_to_send.variables
+                    ).addCallback(send)
+                except IndexError:
+                    return client.finish()
 
-            db_records = self.session \
-                .query(VariableRecord) \
-                .filter(VariableRecord.variable_id == db_variable.id) \
-                .all()
+            return send(None)
 
-            self.assertEqual(len(db_records), len(test_records))
+        endpoint = clientFromString(reactor, socket_conn)
+        endpoint.connect(Factory.forProtocol(TestClient)) \
+            .addCallback(lambda _: self._log.info('Client connected.'))
+
+        wait_d.addCallback(ready)
+        return wait_d

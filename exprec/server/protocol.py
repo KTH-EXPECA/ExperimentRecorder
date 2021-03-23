@@ -78,11 +78,6 @@ class SingleExperimentServer(Protocol):
             else:
                 # send welcome message
                 experiment_id = self._interface.new_experiment_instance()
-                welcome_msg = make_message(
-                    msg_type='welcome',
-                    payload={'instance_id': experiment_id}
-                )
-                self._send(welcome_msg)
 
                 # immediately add the ip address to the newly created
                 # experiment instance
@@ -100,6 +95,12 @@ class SingleExperimentServer(Protocol):
                     experiment_id=experiment_id,
                     address=address.lower()
                 )
+
+                welcome_msg = make_message(
+                    msg_type='welcome',
+                    payload={'instance_id': experiment_id}
+                )
+                self._send(welcome_msg)
 
                 self.wait_for_records_metadata_or_finish(exp_id=experiment_id)
 
@@ -181,6 +182,9 @@ class ExperimentRecordingServer(Factory):
     def __init__(self,
                  db_path: str,
                  output_dir: Path,
+                 records_filename: str = 'records.csv',
+                 metadata_filename: str = 'metadata.json',
+                 times_filename: str = 'times.json',
                  db_persist: bool = False,
                  default_metadata: Mapping[str, Any] = {}):
         self._log = Logger()
@@ -193,10 +197,38 @@ class ExperimentRecordingServer(Factory):
         self._interface = BufferedExperimentInterface(
             db_engine=self._engine,
             default_metadata=default_metadata)
+
         self._out_dir = output_dir.resolve()
         self._out_dir.mkdir(exist_ok=True, parents=True)
 
+        def check_path(p: Path) -> Path:
+            if p.exists():
+                if p.is_dir():
+                    raise FileExistsError(p)
+                else:
+                    self._log.warn(
+                        format='{path} will be overwritten with new data.',
+                        path=p
+                    )
+            return p.resolve()
+
+        self._records_path = check_path(self._out_dir / records_filename)
+        self._metadata_path = check_path(self._out_dir / metadata_filename)
+        self._times_path = check_path(self._out_dir / times_filename)
+
         self._backlog_lc = None
+
+    @property
+    def records_path(self) -> Path:
+        return self._records_path
+
+    @property
+    def metadata_path(self) -> Path:
+        return self._metadata_path
+
+    @property
+    def times_path(self) -> Path:
+        return self._times_path
 
     def buildProtocol(self, addr: IAddress) -> SingleExperimentServer:
         return SingleExperimentServer(self._interface, addr)
@@ -231,12 +263,12 @@ class ExperimentRecordingServer(Factory):
         metadata = self._interface.metadata_as_dict()
         times = self._interface.experiment_times_as_dict()
 
-        records.to_csv(self._out_dir / 'records.csv', index=True)
+        records.to_csv(self._records_path, index=True)
 
-        with (self._out_dir / 'metadata.json').open('w') as fp:
+        with self._metadata_path.open('w') as fp:
             json.dump(metadata, fp, indent=4)
 
-        with (self._out_dir / 'times.json').open('w') as fp:
+        with self._times_path.open('w') as fp:
             json.dump(times, fp, indent=4)
 
         self._interface.close()

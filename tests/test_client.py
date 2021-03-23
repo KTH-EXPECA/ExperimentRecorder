@@ -23,12 +23,15 @@ class TestClient(unittest.TestCase):
     def setUp(self) -> None:
         self._exp_id_called = False
 
-        def _exp_id_callback(exp_id: uuid.UUID):
-            self.assertIsInstance(exp_id, uuid.UUID)
-            self._exp_id_called = True
+        class TestClient(ExperimentClient):
+            testcase = self
 
-        d = Deferred().addCallback(_exp_id_callback)
-        self.client = ExperimentClient(exp_id_deferred=d)
+            def got_experiment_id(self, experiment_id: uuid.UUID):
+                super(TestClient, self).got_experiment_id(experiment_id)
+                self.testcase.assertIsInstance(experiment_id, uuid.UUID)
+                self.testcase._exp_id_called = True
+
+        self.client = TestClient()
         self.packer = MessagePacker()
         self.unpacker = MessageUnpacker()
 
@@ -143,4 +146,3 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg.mtype, 'finish')
         self.assertIsNone(msg.payload)
-
