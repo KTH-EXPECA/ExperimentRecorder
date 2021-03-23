@@ -53,7 +53,7 @@ def main(endpoint: str, timeout: float):
             lc = LoopingCall(send_record)
             lc.start(0.10)  # 10 records per second
 
-            self._logger.info('Scheduling shutdown for {secs} in the future.',
+            self._logger.info('Scheduling shutdown for {secs}s in the future.',
                               secs=timeout)
 
             task.deferLater(reactor, timeout, lc.stop) \
