@@ -77,6 +77,9 @@ class SingleExperimentServer(Protocol):
             else:
                 # send welcome message
                 experiment_id = self._interface.new_experiment_instance()
+                self._log.info('Assigned experiment id {exp_id} to client '
+                               'with address {addr}.',
+                               exp_id=experiment_id, addr=addr)
 
                 # immediately add the ip address to the newly created
                 # experiment instance
@@ -228,6 +231,7 @@ class ExperimentRecordingServer(Factory):
         return self._times_path
 
     def buildProtocol(self, addr: IAddress) -> SingleExperimentServer:
+        self._log.info('Incoming connection from {addr}.', addr=addr)
         return SingleExperimentServer(self._interface, addr)
 
     def startFactory(self):

@@ -50,7 +50,9 @@ setuptools.setup(
     ],
     install_requires=reqs,
     extras_require={},
-    entry_points={},  # TODO, for server in the future.
+    entry_points={
+        'console_scripts': ['exprec-server=exprec.server.cli:main'],
+    },
     python_requires='>=3.8',
     license='Apache v2'
 )

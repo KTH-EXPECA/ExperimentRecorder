@@ -1,0 +1,15 @@
+[experiment]
+name = "TestExperiment"
+description = "Test Experiment"
+
+[output]
+directory = "./examples/test_output/"
+record_file = "test_records.csv"
+metadata_file = "test_metadata.json"
+times_file = "test_times.json"
+
+[database]
+engine = "sqlite:///examples/test.db"
+
+[server]
+endpoint = "unix:/tmp/exprec.sock"
